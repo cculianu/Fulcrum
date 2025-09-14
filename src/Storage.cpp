@@ -30,9 +30,9 @@
 #include "Storage/DBRecordArray.h"
 #include "Storage/RecordFile.h"
 #include "SubsMgr.h"
+#include "Util.h"
 #include "VarInt.h"
 
-#include "bitcoin/crypto/endian.h"
 #include "bitcoin/hash.h"
 
 #if __has_include(<rocksdb/advanced_cache.h>)
@@ -141,6 +141,12 @@ namespace {
         void makePlatformInfoCurrent();
     };
 
+    // type "tag" that specifies legacy deserialization (see: getMetaFromDBAndDoBasicCompatibilityCheck in this file)
+    struct MetaLegacy : Meta {
+        // move-construct from Meta
+        MetaLegacy(Meta &&m) : Meta(std::move(m)) {}
+    };
+
     void Meta::makePlatformInfoCurrent() {
         platformBits = kPlatformBits;
         if (const auto *app = App::globalInstance()) {
@@ -159,44 +165,17 @@ namespace {
                                 kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
                                 kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(falseMem));
 
-    // serialize/deser -- for basic types we use QDataStream, but we also have specializations at the end of this file
-    template <typename Type>
-    QByteArray Serialize(const Type & n) {
-        QByteArray ba;
-        if constexpr (std::is_base_of_v<QByteArray, Type>) {
-            ba = n;
-        } else {
-            QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
-            ds << n;
-        }
-        return ba;
-    }
-    template <typename Type>
-    Type Deserialize(const QByteArray &ba, bool *ok = nullptr) {
-        Type ret{};
-        if constexpr (std::is_base_of_v<QByteArray, Type>) {
-            ret = ba;
-            if (ok) *ok = true;
-        } else {
-            QDataStream ds(ba);
-            ds >> ret;
-            if (ok)
-                *ok = ds.status() == QDataStream::Status::Ok;
-        }
-        return ret;
-    }
-
     template <typename T>
     concept NonPointer = !std::is_pointer_v<std::remove_cv_t<T>>;
 
     template <typename T>
-    concept TrivCopObj = std::is_trivially_copyable_v<T> && NonPointer<T>;
+    concept TrivCopObj = std::is_trivially_copyable_v<T> && NonPointer<T> && std::has_unique_object_representations_v<T>;
 
     template <typename T>
-    concept Scalar = std::is_scalar_v<T> && NonPointer<T>;
+    concept Scalar = std::is_scalar_v<T> && TrivCopObj<T> && !std::is_floating_point_v<T> /* No float support for now */;
 
-    /// Return a shallow, temporary copy of the memory of an object as a QByteArray. This reduces typing of
-    /// the boilerplate: "QByteArray::fromRawData(reinterpret_cast...." etc everywhere in this file.
+    /// Return a shallow, temporary copy of the memory of an object as a QByteArray. This reduces typing of the
+    /// boilerplate: "QByteArray::fromRawData(reinterpret_cast...." etc everywhere in this file.
     /// Note: It is unsafe to use this function for anything other than obtaining a weak reference to the memory of an
     /// object as a QByteArray for temporary purposes. The original object must live at least as long as this returned
     /// QByteArray.  Note that even copy-constructing a new QByteArray from this returned QByteArray will lead to
@@ -206,9 +185,9 @@ namespace {
         return QByteArray::fromRawData(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
     }
 
-    /// Construct a QByteArray from a deep copy of any object's memory area. Slower than ShallowTmp above but 100% safe
-    /// to use after the original object expires since the returned QByteArray takes ownership of its private copy of
-    /// the memory it allocated.
+    /// Construct a QByteArray from a deep copy of any object's memory area. Slower than ShallowTmp above but
+    /// 100% safe to use after the original object's lifetime ends since the returned QByteArray takes ownership of its
+    /// private copy of the memory it allocated.
     template <TrivCopObj Object>
     QByteArray DeepCpy(const Object *mem, size_t size = sizeof(Object)) {
         return QByteArray(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
@@ -216,32 +195,62 @@ namespace {
 
     /// Serialize a simple value such as an int directly, without using the space overhead that QDataStream imposes.
     /// This is less safe but is more compact since the bytes of the passed-in value are written directly to the
-    /// returned QByteArray, without any encapsulation.  Note that use of this mechanism makes all data in the database
-    /// no longer platform-neutral, which is ok. The presumption is users can re-synch their DB if switching
-    /// architectures.
-    template <Scalar S> QByteArray SerializeScalar (const S & s) { return DeepCpy(&s); }
-    template <Scalar S> QByteArray SerializeScalarNoCopy (const S &s) { return ShallowTmp(&s);  }
+    /// returned QByteArray, without any encapsulation.  Note that if on a big endian system we will be byte swapping
+    /// to little endian (all scalars are little endian unless BigEndian = true).
+    template <bool BigEndian = false, bool ForEphemeralUse = false, Scalar S>
+    QByteArray SerializeScalar(const S & s) {
+        if constexpr (sizeof(S) <= 1u || BigEndian == Util::isBigEndian()) {
+            // fast-path where endianness matches or if 1-byte value; just copy the memory directly
+            return ForEphemeralUse ? ShallowTmp(&s) : DeepCpy(&s);
+        } else {
+            // otherwise ephemeral-ness cannot be respected; create a new DeepCpy of the byte-swapped data
+            using US = std::make_unsigned_t<S>;
+            US us = static_cast<US>(s);
+            if constexpr (BigEndian)
+                us = Util::hToBe(us);
+            else
+                us = Util::hToLe(us);
+            return DeepCpy(&us);
+        }
+    }
+    template <bool BigEndian = false, Scalar S> QByteArray SerializeScalarEphemeral(const S &s) {
+        return SerializeScalar<BigEndian, true>(s);
+    }
     /// Inverse of above.  Pass in an optional 'pos' pointer if you wish to continue reading raw scalars from the same
     /// QByteArray during subsequent calls to this template function.  *ok, if specified, is set to false if we ran off
     /// the QByteArray's bounds, and a default-constructed value of 'Scalar' is returned.  No other safety checking is
     /// done.  On successful deserialization of the scalar, *pos (if specified) is updated to point just past the
     /// last byte of the successuflly converted item.  On failure, *pos is always set to point past the end of the
     /// QByteArray.
-    template <Scalar S>
-    S DeserializeScalar(const QByteArray &ba, bool *ok = nullptr, int *pos_out = nullptr) {
+    template <Scalar S, bool BigEndian = false>
+    S DeserializeScalar(const QByteArray &ba, bool *ok = nullptr, QByteArray::size_type *pos_out = nullptr) {
         S ret{};
-        int dummy = 0;
-        int & pos = pos_out ? *pos_out : dummy;
-        if (pos >= 0 && pos + int(sizeof(ret)) <= ba.size()) {
+        QByteArray::size_type dummy = 0;
+        QByteArray::size_type & pos = pos_out ? *pos_out : dummy;
+        if (pos >= 0 && pos + QByteArray::size_type(sizeof(ret)) <= ba.size()) {
             if (ok) *ok = true;
             std::memcpy(reinterpret_cast<std::byte *>(&ret), ba.constData() + pos, sizeof(ret));
             pos += sizeof(ret);
+            if constexpr (sizeof(S) > 1u && BigEndian != Util::isBigEndian()) {
+                // need to do a byte swap for >1 byte values if the requested endian-ness does not match
+                using US = std::make_unsigned_t<S>;
+                ret = static_cast<S>(BigEndian ? Util::beToH(static_cast<US>(ret)) : Util::leToH(static_cast<US>(ret)));
+            }
         } else {
             if (ok) *ok = false;
             pos = ba.size();
         }
         return ret;
     }
+
+    // serialize/deser -- for basic int types we use SerializeScalar, but we also have specializations at the end of this file.
+    // Note that no completely generic implementation is provided intentionally to catch missing Ser/Deser code paths at compile-time.
+    template <typename Type> QByteArray Serialize(const Type & n);
+    template <typename Type> Type Deserialize(const QByteArray &ba, bool *ok = nullptr);
+
+    // Specialziation for Scalars (ints, basically) -- serialized as little endian bytes.
+    template <Scalar Type> Type Serialize(const Type &n) { return SerializeScalar<false, false>(n); }
+    template <Scalar Type> Type Deserialize(const QByteArray &ba, bool *ok) { return DeserializeScalar<Type>(ba, ok, nullptr); }
 
     struct SHUnspentValue {
         bool valid = false;
@@ -255,21 +264,14 @@ namespace {
 
         explicit RpaDBKey(uint32_t h) : height(h) {}
 
-        QByteArray toBytes() const {
-            const uint32_t bigEndian = htobe32(height); // swap to big endian
-            return QByteArray(reinterpret_cast<const char *>(&bigEndian), sizeof(bigEndian));
-        }
+        QByteArray toBytes() const { return SerializeScalar</*BigEndian=*/true, /*Ephemeral=*/false>(height); }
 
         static RpaDBKey fromBytes(const QByteArray &ba, bool *ok = nullptr, bool strictSize = false) {
-            RpaDBKey k{0u};
-            if (size_t(ba.size()) < sizeof(uint32_t) || (strictSize && size_t(ba.size()) != sizeof(uint32_t))) {
+            RpaDBKey k(DeserializeScalar<uint32_t, /*BigEndian=*/true>(ba, ok, nullptr));
+            if (strictSize && size_t(ba.size()) != sizeof(uint32_t)) { // enforce `strictSize` if specified by caller
+                k.height = 0u;
                 if (ok) *ok = false;
-                return k;
             }
-            uint32_t bigEndian;
-            std::memcpy(&bigEndian, ba.constData(), sizeof(uint32_t));
-            k.height = be32toh(bigEndian); // swap to host order
-            if (ok) *ok = true;
             return k;
         }
 
@@ -280,6 +282,7 @@ namespace {
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
+    template <> MetaLegacy Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXO &);
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
@@ -289,6 +292,7 @@ namespace {
     template <> RpaDBKey Deserialize(const QByteArray &ba, bool *ok) { return RpaDBKey::fromBytes(ba, ok); }
     QByteArray Serialize2(const bitcoin::Amount &, const bitcoin::token::OutputData *);
     template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
+
     // TxNumVec
     using TxNumVec = std::vector<TxNum>;
     // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
@@ -296,8 +300,7 @@ namespace {
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize(const QByteArray &, bool *);
 
-    // CompactTXO -- not currently used since we prefer toBytes() directly (TODO: remove if we end up never using this)
-    //template <> QByteArray Serialize(const CompactTXO &);
+    // CompactTXO
     template <> CompactTXO Deserialize(const QByteArray &, bool *);
 
 
@@ -305,8 +308,8 @@ namespace {
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return ShallowTmp(s.data(), s.size()); }
 
     /// Generic conversion from any type we operate on to a rocksdb::Slice. Note that the type in question should have
-    /// a conversion function written (eg Serialize) if it is anything other than a QByteArray or a scalar.
-    template<bool safeScalar=false, typename Thing>
+    /// a conversion function written (eg Serialize) if it is anything other than a QByteArray, ByteView, or a Scalar.
+    template <typename Thing>
     auto ToSlice(const Thing &thing) {
         if constexpr (std::is_base_of_v<rocksdb::Slice, Thing>) {
             // same type, no-op, return ref to thing (const Slice &)
@@ -317,15 +320,14 @@ namespace {
         } else if constexpr (std::is_same_v<ByteView, Thing>) {
             // ByteView conversion, return reference to data in ByteView
             return rocksdb::Slice(thing.charData(), thing.size());
-        } else if constexpr (!safeScalar && std::is_scalar_v<Thing> && !std::is_pointer_v<Thing>) {
-            return rocksdb::Slice(reinterpret_cast<const char *>(&thing), sizeof(thing)); // returned slice points to raw scalar memory itself
         } else {
             // the purpose of this holder is to keep the temporary QByteArray alive for as long as the slice itself is alive
             struct BagOfHolding {
                 QByteArray bytes;
-                rocksdb::Slice slice;
-                operator const rocksdb::Slice &() const { return slice; }
-            } h { Serialize(thing), ToSlice(h.bytes) };
+                operator rocksdb::Slice () const { return ToSlice(bytes); }
+            } h;
+            if constexpr (Scalar<Thing>) h.bytes = SerializeScalarEphemeral</*BigEndian=*/false>(thing);
+            else h.bytes = Serialize(thing);
             return h; // this holder type "acts like" a Slice due to its operator const Slice &()
         }
     };
@@ -346,12 +348,7 @@ namespace {
     /// NOTE: these may throw DatabaseError
     /// If missingOk=false, then the returned optional is guaranteed to have a value if this function returns without throwing.
     /// If missingOk=true, then if there was no other database error and the key was not found, the returned optional !has_value()
-    ///
-    /// Template arg "safeScalar", if true, will deserialize scalar int, float, etc data using the Deserialize<>
-    /// function (uses QDataStream, is platform neutral, but is slightly slower).  If false, we will use the
-    /// DeserializeScalar<> fast function for scalars such as ints. It's important to read from the DB in the same
-    /// 'safeScalar' mode as was written!
-    template <typename RetType, bool safeScalar = false, typename KeyType>
+    template <typename RetType, typename KeyType>
     std::optional<RetType> GenericDBGet(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf,
                                         const KeyType & keyIn, bool missingOk = false,
                                         const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
@@ -361,7 +358,7 @@ namespace {
         rocksdb::PinnableSlice datum;
         std::optional<RetType> ret;
         if (!db || !cf) [[unlikely]] throw InternalError("GenericDBGet was passed a null pointer!");
-        const auto status = db->Get(ropts, cf, ToSlice<safeScalar>(keyIn), &datum);
+        const auto status = db->Get(ropts, cf, ToSlice(keyIn), &datum);
         if (status.IsNotFound()) {
             if (missingOk)
                 return ret; // optional will not has_value() to indicate missing key
@@ -375,7 +372,6 @@ namespace {
         } else {
             // ok status
             if constexpr (std::is_base_of_v<QByteArray, std::remove_cv_t<RetType> >) {
-                static_assert (!safeScalar, "safeScalar=true mode is not supported for QByteArrays (it only is useful for scalar types)" );
                 // special compile-time case for QByteArray subclasses -- return a deep copy of the data bytes directly.
                 // TODO: figure out a way to do this without the 1 extra copy! (PinnableSlice -> ret).
                 ret.emplace( reinterpret_cast<const char *>(datum.data()), QByteArray::size_type(datum.size()) );
@@ -383,7 +379,7 @@ namespace {
                 static_assert (!std::is_same_v<rocksdb::PinnableSlice, std::remove_cv_t<RetType>>,
                                "FIXME: rocksdb C++ is broken. This doesn't actually work.");
                 ret.emplace(std::move(datum)); // avoids an extra copy -- but it doesn't work because Facebook doesn't get how C++ works.
-            } else if constexpr (!safeScalar && std::is_scalar_v<RetType> && !std::is_pointer_v<RetType>) {
+            } else if constexpr (Scalar<RetType>) {
                 if (!acceptExtraBytesAtEndOfData && datum.size() > sizeof(RetType)) {
                     // reject extra stuff at end of data stream
                     throw DatabaseFormatError(QString("%1: Extra bytes at the end of data")
@@ -398,7 +394,7 @@ namespace {
                                      QString(typeid (RetType).name())));
                 }
             } else {
-                if (UNLIKELY(acceptExtraBytesAtEndOfData))
+                if (acceptExtraBytesAtEndOfData) [[unlikely]]
                     Debug() << "Warning:  Caller misuse of function '" << __func__
                             << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
                 bool ok{};
@@ -414,64 +410,50 @@ namespace {
     }
 
     /// Conveneience for above with the missingOk flag set to false. Will always throw or return a real value.
-    template <typename RetType, bool safeScalar = false, typename KeyType>
+    template <typename RetType, typename KeyType>
     RetType GenericDBGetFailIfMissing(rocksdb::DB * db, rocksdb::ColumnFamilyHandle * cf,
                                       const KeyType &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false,
                                       const rocksdb::ReadOptions & ropts = rocksdb::ReadOptions())
     {
-        return GenericDBGet<RetType, safeScalar>(db, cf, k, false, errMsgPrefix, extraDataOk, ropts).value();
+        return GenericDBGet<RetType>(db, cf, k, false, errMsgPrefix, extraDataOk, ropts).value();
     }
 
     /// Throws on all errors. Otherwise writes to db.
-    template <bool safeScalar = false, typename KeyType, typename ValueType>
+    template <typename KeyType, typename ValueType>
     void GenericDBPut
                 (rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf, const KeyType & key, const ValueType & value,
                  const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
                  const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
     {
-        auto st = db->Put(opts, cf, ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
+        auto st = db->Put(opts, cf, ToSlice(key), ToSlice(value));
         if (!st.ok())
             throw DatabaseError(QString("%1: %2").arg(
                                     (!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing to db %1").arg(DBName(db, cf))),
                                     StatusString(st)));
     }
     /// Throws on all errors. Otherwise enqueues a write to the batch.
-    template <bool safeScalar = false, typename KeyType, typename ValueType>
+    template <typename KeyType, typename ValueType>
     void GenericBatchPut
                 (rocksdb::WriteBatch & batch, rocksdb::ColumnFamilyHandle *cf, const KeyType & key, const ValueType & value,
                  const QString & errorMsgPrefix = QString())  ///< used to specify a custom error message in the thrown exception
     {
-        auto st = batch.Put(cf, ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
+        auto st = batch.Put(cf, ToSlice(key), ToSlice(value));
         if (!st.ok())
             throw DatabaseError(QString("%1 (cf: %3): %2")
                                     .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Put"),
                                          StatusString(st), CFName(cf)));
     }
     /// Throws on all errors. Otherwise enqueues a delete to the batch.
-    template <bool safeScalar = false, typename KeyType>
+    template <typename KeyType>
     void GenericBatchDelete
                 (rocksdb::WriteBatch & batch, rocksdb::ColumnFamilyHandle *cf, const KeyType & key,
                  const QString & errorMsgPrefix = QString())  ///< used to specify a custom error message in the thrown exception
     {
-        auto st = batch.Delete(cf, ToSlice<safeScalar>(key));
+        auto st = batch.Delete(cf, ToSlice(key));
         if (!st.ok())
             throw DatabaseError(QString("%1 (cf: %3): %2")
                                     .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Delete"),
                                          StatusString(st), CFName(cf)));
-    }
-    /// Throws on all errors. Otherwise deletes a key from db. It is not an error to delete a non-existing key.
-    template <bool safeScalar = false, typename KeyType>
-    void GenericDBDelete
-                (rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf, const KeyType & key,
-                 const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
-                 const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
-    {
-        auto st = db->Delete(opts, cf, ToSlice<safeScalar>(key));
-        if (!st.ok())
-            throw DatabaseError(QString("%1: %2")
-                                    .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix
-                                                                    : QString("Error deleting a key from db %1").arg(DBName(db, cf))),
-                                         StatusString(st)));
     }
 
     //// A helper data struct -- written to the blkinfo table. This helps localize a txnum to a specific position in
@@ -486,10 +468,11 @@ namespace {
         bool operator!=(const BlkInfo &o) const { return !(*this == o); }
         [[maybe_unused]] bool operator<(const BlkInfo &o) const { return txNum0 == o.txNum0 ? nTx < o.nTx : txNum0 < o.txNum0; }
         BlkInfo &operator=(const BlkInfo &) = default;
+
+        // serializes data members as little endian integers
+        QByteArray toBytes(QByteArray *bufAppend = nullptr) const;
     };
-    // serializes as raw bytes from struct
-    template <> QByteArray Serialize(const BlkInfo &);
-    // deserializes as raw bytes from struct
+    // deserializes as little endian integers from struct
     template <> BlkInfo Deserialize(const QByteArray &, bool *);
 
     /// Block rewind/undo information. One of these is kept around in the db for the last configuredUndoDepth() blocks.
@@ -928,7 +911,7 @@ namespace {
     private:
         ByteView makeKeyFromHash(const ByteView &bv) const {
             const auto len = bv.size();
-            if (UNLIKELY(len != HashLen))
+            if (len != HashLen) [[unlikely]]
                 throw DatabaseFormatError(QString("Hash \"%1\" is not %2 bytes").arg(QString(Util::ToHexFast(bv.substr(0, 80).toByteArray(false)))).arg(HashLen));
             if (keyPos == End)
                 return bv.substr(len - keyBytes, keyBytes);
@@ -1126,7 +1109,7 @@ namespace {
                     }
                     ++verified;
                     ++i;
-                    if (UNLIKELY(0 == i % 10 && ourApp && ourApp->signalsCaught()))
+                    if (0 == i % 10 && ourApp && ourApp->signalsCaught()) [[unlikely]]
                         throw UserInterrupted("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
                 }
                 if (results.back()) Warning() << "Expected last entry to be \"not found\"!";
@@ -1300,20 +1283,26 @@ struct Storage::Pvt
 };
 
 namespace {
-    /// returns a key that is hashX concatenated with the serializd ctxo -> size 40 or 41 byte vector
+    /// returns a key that is hashX concatenated with the serializd ctxo -> size 41 byte vector
     /// Note hashX must be valid and sized HashLen otherwise this throws.
     QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo) {
         // we do it this way for performance:
-        const int hxlen = hashX.length();
-        if (UNLIKELY(hxlen != HashLen))
+        using Size = QByteArray::size_type;
+        const Size hxlen = hashX.length();
+        if (hxlen != HashLen) [[unlikely]]
             throw InternalError(QString("mkShunspentKey -- scripthash is not exactly %1 bytes: %2").arg(HashLen).arg(QString(hashX.toHex())));
-        QByteArray key(hxlen + int(ctxo.serializedSize(false /* no force wide */)), Qt::Uninitialized);
+        constexpr bool forceWide = true, bigEndian = true; // this is new Fulcrum 2.x format
+        const Size ctxoSerLen = ctxo.serializedSize(forceWide);
+        QByteArray key(hxlen + ctxoSerLen, Qt::Uninitialized);
         std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
-        ctxo.toBytesInPlace(reinterpret_cast<std::byte *>(key.data()+hxlen), ctxo.serializedSize(false), false /* no force wide */);
+        const Size nTxoSerBytes = ctxo.toBytesInPlace(reinterpret_cast<std::byte *>(key.data()) + hxlen,
+                                                      ctxoSerLen, forceWide, bigEndian);
+        if (nTxoSerBytes != ctxoSerLen) [[unlikely]]
+            throw InternalError(QString("mkShunspentKey -- nTxoSerBytes != ctxoSerLen! FIXME! (%1 != %2)").arg(nTxoSerBytes).arg(ctxoSerLen));
         return key;
     }
     /// throws if key is not the correct size (must be exactly 40 or 41 bytes)
-    CompactTXO extractCompactTXOFromShunspentKey(const rocksdb::Slice &key) {
+    CompactTXO extractCompactTXOFromShunspentKey(const rocksdb::Slice &key, bool const legacy) {
         static const auto ExtractHashXHex = [](const rocksdb::Slice &key) -> QString {
             if (key.size() >= HashLen)
                 return QString(FromSlice(key).left(HashLen).toHex());
@@ -1321,20 +1310,20 @@ namespace {
                 return "<undecipherable scripthash>";
         };
         if (const auto ksz = key.size();
-                UNLIKELY(ksz != HashLen + CompactTXO::minSize() && ksz != HashLen + CompactTXO::maxSize()))
+                (!legacy || ksz != HashLen + CompactTXO::minSize()) && ksz != HashLen + CompactTXO::maxSize()) [[unlikely]]
             // should never happen, indicates db corruption
             throw InternalError(QString("Key size for scripthash %1 is invalid").arg(ExtractHashXHex(key)));
-        static_assert (sizeof(*key.data()) == 1, "Assumption is rocksdb::Slice is basically a byte vector");
+        static_assert (Util::ByteLike<std::remove_pointer_t<decltype(key.data())>>, "Assumption is rocksdb::Slice is basically a byte vector");
         const CompactTXO ctxo =
             CompactTXO::fromBytesInPlaceExactSizeRequired(reinterpret_cast<const std::byte *>(key.data()) + HashLen,
-                                                          key.size() - HashLen);
+                                                          key.size() - HashLen, !legacy);
         if (UNLIKELY(!ctxo.isValid()))
             // should never happen, indicates db corruption
             throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(ExtractHashXHex(key)));
         return ctxo;
     }
-    std::pair<HashX, CompactTXO> extractShunspentKey(const rocksdb::Slice & key) {
-        const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // throws if wrong size
+    std::pair<HashX, CompactTXO> extractShunspentKey(const rocksdb::Slice & key, bool const legacy) {
+        const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key, legacy); // throws if wrong size
         return {DeepCpy(key.data(), HashLen), ctxo}; // if we get here size ok, can extract HashX
     }
 
@@ -1384,6 +1373,26 @@ QString Storage::rocksdbVersion()
 #endif
 }
 
+namespace {
+std::optional<Meta> getMetaFromDBAndDoBasicCompatibilityCheck(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf, bool legacy)
+{
+    const QString errMsg1{"Incompatible database format -- delete the datadir and resynch."};
+    const QString errMsg2{errMsg1 + " RocksDB error"};
+    std::optional<Meta> opt;
+    if (!legacy)
+        opt = GenericDBGet<Meta>(db, cf, kMeta, true, errMsg2);
+    else if (auto opt2 = GenericDBGet<MetaLegacy>(db, cf, kMeta, true, errMsg2)) // use a "type tag" approach to specify legacy deserialization
+        opt.emplace(std::move(*opt2)); // slice object back down to `Meta` type
+    if (opt) {
+        if (!opt->isMagicOk() || !opt->isVersionSupported()
+            || (opt->isMinimumExtraPlatformInfoVersion() && opt->platformBits != Meta::kPlatformBits)) {
+            throw DatabaseFormatError(errMsg1);
+        }
+    }
+    return opt;
+}
+} // namespace
+
 void Storage::startup()
 {
     Log() << "Loading database ...";
@@ -1409,14 +1418,8 @@ void Storage::startup()
 
     // load/check meta
     {
-        const QString errMsg1{"Incompatible database format -- delete the datadir and resynch."};
-        const QString errMsg2{errMsg1 + " RocksDB error"};
-        if (const auto opt = GenericDBGet<Meta>(p->db, p->db.meta, kMeta, true, errMsg2)) {
+        if (const auto opt = getMetaFromDBAndDoBasicCompatibilityCheck(p->db, p->db.meta, false)) {
             const Meta &m_db = *opt;
-            if (!m_db.isMagicOk() || !m_db.isVersionSupported()
-                    || (m_db.isMinimumExtraPlatformInfoVersion() && m_db.platformBits != p->meta.platformBits)) {
-                throw DatabaseFormatError(errMsg1);
-            }
             p->meta = m_db;
             Debug () << "Read meta from db ok";
             if (!p->meta.coin.isEmpty())
@@ -1748,7 +1751,7 @@ void Storage::checkFulc1xUpgradeDB()
 
     // Commence the upgrade....!
     Tic totalElapsed;
-    uint64_t totalRowCt{}, totalByteCt{}, totalBatchCt{};
+    uint64_t totalRowCt{}, totalByteCt{}, totalBatchCt{}, totalConvCt{};
     size_t totalTableCt{};
 
     // We disable signals since it would be *unsafe* to close the app during this process!
@@ -1837,15 +1840,30 @@ void Storage::checkFulc1xUpgradeDB()
             }
             std::unique_ptr<rocksdb::DB> dbin(dbin_raw);
             const bool isMetaTable = info.handle == p->db.meta;
+            std::optional<QByteArray> convertedDbMetaSerialization; // upgraded/converted 'kMeta' row (class: Meta)
+
+            const bool isTableRequiringLEtoBEKeyConv = info.handle == p->db.undo || info.handle == p->db.blkinfo;
+
+            const bool isShunspentTable = info.handle == p->db.shunspent;
 
             // If encountering the "meta" table (which is always first!), check that Fulcrum 1.x did not have the DB
-            // flaged as "dirty"!
-            if (isMetaTable && isDirty_impl(dbin.get(), dbin->DefaultColumnFamily())) {
-                throw DatabaseError(QString("It appears that the database in \"%1\" from %2 1.x is corrupt. Cannot"
-                                            " proceed with DB upgrade. Sorry!"
-                                            "\n\nPlease delete the datadir and resynch to bitcoind.\n")
-                                        .arg(fname, APPNAME));
+            // flaged as "dirty".
+            if (isMetaTable) {
+                if (isDirty_impl(dbin.get(), dbin->DefaultColumnFamily())) {
+                    throw DatabaseError(QString("It appears that the database in \"%1\" from %2 1.x is corrupt. Cannot"
+                                                " proceed with DB upgrade. Sorry!"
+                                                "\n\nPlease delete the datadir and resynch to bitcoind.\n")
+                                            .arg(fname, APPNAME));
+                }
+                // The below throws if the 'Meta' entry is bad due to endian mismatch (since Fuclrum 1.x saved data in host endian format)
+                if (auto legacyMeta = getMetaFromDBAndDoBasicCompatibilityCheck(dbin.get(), dbin->DefaultColumnFamily(), /*legacy=*/true))
+                    convertedDbMetaSerialization.emplace(Serialize(*legacyMeta));
+
             }
+            else if (isTableRequiringLEtoBEKeyConv)
+                Debug() << name << " table conversion will take place; will convert all height keys to big endian";
+            else if (isShunspentTable)
+                Debug() << name << " table conversion will take place; will convert all hashx:ctxo keys to use big-endian encoding for ctxos";
 
             // Everything so far ok, create an iterator over the input DB table
             auto rdOpts = p->db.defReadOpts;
@@ -1880,13 +1898,45 @@ void Storage::checkFulc1xUpgradeDB()
                 t1 = Tic();
             };
             for (iterin->SeekToFirst(); iterin->Valid(); iterin->Next()) {
-                if (isMetaTable && iterin->key() == kDirty) [[unlikely]]
-                    // do *not* copy the dirty flag for the meta table so as to not clear the fact that we are "dirty" now...
-                    continue;
-                const auto byteSz = iterin->key().size() + iterin->value().size();
+                // Do any conversions below. We convert the following:
+                // - `meta` table entry "meta", we little-endian-ify the struct Meta serialization
+                // - `undo` & `blkinfo` table: All keys get converted from little endian -> big endian encoding (for better sorting)
+                // - `shunspent` table: All keys get reformated with uniform-sized keys and the CompactTXO is serialized in big-endian order for better sorting.
+                rocksdb::Slice keyToWrite = iterin->key(), valueToWrite = iterin->value();
+                std::optional<QByteArray> convertedKeyBytes;
+                if (isMetaTable) [[unlikely]]  {
+                    if (keyToWrite == kDirty) {
+                        // do *not* copy the dirty flag for the meta table so as to not clear the fact that we are "dirty" now...
+                        Debug() << "Skipped meta table entry: " << keyToWrite.ToString();
+                        continue;
+                    } else if (keyToWrite == kMeta) {
+                        // NB: if this branch is taken, `convertedDbMetaSerialization` must .has_value()
+                        FatalAssert(convertedDbMetaSerialization.has_value(), "Defensive programming check failed");
+                        valueToWrite = ToSlice(convertedDbMetaSerialization.value()); // ensure endian-neutral encoding
+                        Debug() << "Converted meta table entry: " << keyToWrite.ToString();
+                        ++totalConvCt;
+                    }
+                } else if (isTableRequiringLEtoBEKeyConv) {
+                    // Convert the "height" key from little endian to big endian (should perform slightly better because it will be fully sorted)
+                    bool ok;
+                    const uint32_t height = DeserializeScalar<uint32_t, /*BigEndian=*/false>(FromSlice(iterin->key()), &ok);
+                    if (!ok || height > MAX_HEADERS)
+                        throw DatabaseFormatError(QString("Expected a key in table '%1' to be a serialized little-endian"
+                                                          " integer <= %3; instead got: %4 (hex: %2)")
+                                                  .arg(name, QString::fromLatin1(FromSlice(iterin->key()).toHex())).arg(MAX_HEADERS).arg(height));
+                    // convert to big endian encoding
+                    keyToWrite = ToSlice(convertedKeyBytes.emplace(SerializeScalar</*BigEndian=*/true,
+                                                                                   /*Ephemeral=*/false>(height)));
+                    ++totalConvCt;
+                } else if (isShunspentTable) {
+                    const auto & [hashX, ctxo] = extractShunspentKey(iterin->key(), /*legacy=*/true); // parse legacy key; may throw
+                    keyToWrite = ToSlice(convertedKeyBytes.emplace(mkShunspentKey(hashX, ctxo))); // convert to latest format
+                    ++totalConvCt;
+                }
+                const auto byteSz = keyToWrite.size() + valueToWrite.size();
                 byteCt += byteSz;
                 totalByteCt += byteSz;
-                if (auto st = batch.Put(info.handle, iterin->key(), iterin->value()); !st.ok())
+                if (auto st = batch.Put(info.handle, keyToWrite, valueToWrite); !st.ok())
                     throw DatabaseError("rocksdb batch.Put returned error: " + StatusString(st));
                 ++totalCt; ++totalRowCt;
                 if (++batchCt >= batchSize) [[unlikely]]
@@ -1996,8 +2046,9 @@ void Storage::checkFulc1xUpgradeDB()
     // Finally, re-open in non-bulk mode
     openOrCreateDB(false);
 
-    Log() << "Completed DB upgrade. Imported " << totalTableCt << " tables, " << totalRowCt << " rows, "
-          << totalBatchCt << " write batches, " << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
+    Log() << "Completed DB upgrade. Imported " << totalTableCt << " tables, " << totalRowCt << " rows (of which "
+          << totalConvCt << " were converted), " << totalBatchCt << " write batches, "
+          << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
           << totalElapsed.secsStr(1) << " seconds.";
 }
 
@@ -2479,7 +2530,7 @@ void Storage::loadCheckHeadersInDB()
     Log() << "Verifying headers ...";
     uint32_t num = static_cast<uint32_t>(p->db.headersDRA->numRecords());
     std::vector<QByteArray> hVec;
-    const auto t0 = Util::getTimeNS();
+    const Tic t0;
     {
         if (num > MAX_HEADERS)
             throw DatabaseFormatError(QString("Header count (%1) in database exceeds MAX_HEADERS! This is likely due to"
@@ -2508,9 +2559,9 @@ void Storage::loadCheckHeadersInDB()
         }
     }
     if (num) {
-        const auto elapsed = Util::getTimeNS();
-
-        Debug() << "Read & verified " << num << " " << Util::Pluralize("header", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+        if (const auto mops = p->db.concatOperatorHeaders->merges.load(); mops)
+            Debug() << CFName(p->db.headers) << " merge ops: " << mops;
+        Debug() << "Read & verified " << num << " " << Util::Pluralize("header", num) << " from db in " << t0.msecStr() << " msec";
     }
 
     if (!p->merkleCache->isInitialized() && !hVec.empty())
@@ -2531,7 +2582,9 @@ void Storage::loadCheckTxNumsDRAAndBlkInfo()
         Log() << "Checking tx counts ...";
         for (int i = 0; i <= height; ++i) {
             static const QString errMsg("Failed to read a blkInfo from db, the database may be corrupted");
-            const auto blkInfo = GenericDBGetFailIfMissing<BlkInfo>(p->db, p->db.blkinfo, uint32_t(i), errMsg, false, p->db.defReadOpts);
+            const auto blkInfo = GenericDBGetFailIfMissing<BlkInfo>(p->db, p->db.blkinfo,
+                                                                    SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(i)),
+                                                                    errMsg, false, p->db.defReadOpts);
             if (blkInfo.txNum0 != ct)
                 throw DatabaseFormatError(QString("BlkInfo for height %1 does not match computed txNum of %2."
                                                   "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
@@ -2576,7 +2629,7 @@ void Storage::loadCheckTxNumsDRAAndBlkInfo()
             ++bucketNum;
             if (bucketNum % 1'000'000 == 0) [[unlikely]] {
                 Log() << "CheckDB: Verified " << bucketNum << "/" << expectedNBuckets << " " << name
-                      << Util::Pluralize(" bucket", bucketNum) << " ...";
+                      << Util::Pluralize(" bucket", bucketNum)  << " ...";
             }
             if (bucketNum % 10'000 == 0 && app()->signalsCaught()) [[unlikely]]
                 throw UserInterrupted("User interrupted, aborting check");
@@ -2587,8 +2640,11 @@ void Storage::loadCheckTxNumsDRAAndBlkInfo()
                                               "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
                                       .arg(name));
         }
+        if (const auto mops = p->db.concatOperatorTxNum2TxHash->merges.load(); mops)
+            Debug() << CFName(p->db.txnum2txhash) << " merge ops: " << mops;
         Log() << "CheckDB: Verified " << bucketNum << " " << name << Util::Pluralize(" bucket", bucketNum)
-              << " in " << t0.secsStr() << " secs";
+              << ", " << txNumsSeen << Util::Pluralize(" tx hash", txNumsSeen)
+              << ", in " << t0.secsStr() << " secs";
     }
 }
 
@@ -2803,13 +2859,13 @@ void Storage::loadCheckShunspentInDB()
                             "\n\nDelete the datadir and resynch to bitcoind.\n";
     size_t ctr = 0;
     for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-        const auto &[hashx, ctxo] = extractShunspentKey(iter->key());
+        const auto &[hashx, ctxo] = extractShunspentKey(iter->key(), false);
         if (!ctxo.isValid())
             throw DatabaseError(QString("Read an invalid compact txo from the scripthash_unspent database. %1").arg(errMsg));
         TXOInfo info;
         {
             SHUnspentValue shuval = Deserialize<SHUnspentValue>(FromSlice(iter->value()));
-            if (UNLIKELY(!shuval.valid || !bitcoin::MoneyRange(shuval.amount)))
+            if (!shuval.valid || !bitcoin::MoneyRange(shuval.amount)) [[unlikely]]
                 throw DatabaseError(QString("Read an invalid SHUnspentValue from the scripthash_unspent database for scripthash: %1. %2")
                                     .arg(QString(hashx.toHex()), errMsg));
             info.txNum = ctxo.txNum();
@@ -2822,9 +2878,9 @@ void Storage::loadCheckShunspentInDB()
         const TXO txo{txHash, ctxo.N()};
         // look for this in the UTXO db
         const auto optInfo = GenericDBGet<TXOInfo>(p->db, p->db.utxoset, ToSlice(Serialize(txo)), true, "", false, p->db.defReadOpts);
-        if (!optInfo) {
+        if (!optInfo) [[unlikely]] {
             // we permit the buggy utxos above to be off -- those are due to collisions in historical blockchain
-            if (!exceptionsDueToBitcoinBugs.count(txo))
+            if (!exceptionsDueToBitcoinBugs.contains(txo))
                 throw DatabaseError(QString("The scripthash_unspent table is missing a corresponding entry in the UTXO table for TXO \"%1\". %2")
                                     .arg(txo.toString(), errMsg));
             else {
@@ -2833,9 +2889,9 @@ void Storage::loadCheckShunspentInDB()
             }
         }
 
-        if (!info.isValid() || !optInfo->isValid() || *optInfo != info) {
+        if (!info.isValid() || !optInfo || !optInfo->isValid() || *optInfo != info) [[unlikely]] {
             // we permit the buggy utxos above to be off -- those are due to collisions in historical blockchain
-            if (!exceptionsDueToBitcoinBugs.count(txo))
+            if (!exceptionsDueToBitcoinBugs.contains(txo))
                 throw DatabaseError(QString("TXO \"%1\" mismatch between scripthash_unspent and the UTXO table. %2")
                                     .arg(txo.toString(), errMsg));
             else {
@@ -2978,7 +3034,7 @@ void Storage::loadCheckRpaDB()
     if (excMessage) Warning() << *excMessage;
     if (blowAwayWholeDB) {
         Log() << "RPA db is inconsistent and will be resynched from bitcoind. Deleting existing entries ...";
-        deleteRpaEntriesFromHeight(0, true, true);
+        deleteRpaEntriesFromHeight(nullptr, 0, true, true);
         p->rpaInfo.firstHeight = p->rpaInfo.lastHeight = -1;
     }
 
@@ -2995,7 +3051,7 @@ bool Storage::deleteRpaEntriesFromHeight(rocksdb::WriteBatch *batch, const Block
     if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
     constexpr uint32_t u32max = std::numeric_limits<uint32_t>::max();
     QByteArray endKey = RpaDBKey(u32max).toBytes();
-    endKey.append('\0'); // ensue covers entire remaining uint32 range by appending a single '0' byte to make this endkey longer than the last uint32 possible.
+    endKey.append('\xff'); // ensue covers entire remaining uint32 range by appending a single 0xff byte to make this endkey longer than the last uint32 possible.
 
     rocksdb::Status status;
 
@@ -3027,9 +3083,8 @@ bool Storage::deleteRpaEntriesFromHeight(rocksdb::WriteBatch *batch, const Block
 
 bool Storage::deleteRpaEntriesToHeight(rocksdb::WriteBatch *batch, const BlockHeight height, bool flush, bool force)
 {
-    if (!force && p->rpaInfo.lastHeight <= -1) return true; // fast path for disabled or empty index)
+    if (!force && p->rpaInfo.lastHeight <= -1) return true; // fast path for disabled or empty index
     if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
-    QByteArray endKey = RpaDBKey(height).toBytes();
 
     rocksdb::Status status;
     if (batch)
@@ -3089,7 +3144,7 @@ void Storage::loadCheckEarliestUndo()
             const auto keySlice = iter->key();
             if (keySlice.size() != sizeof(uint32_t))
                 throw DatabaseFormatError("Unexpected key in undo database. We expect only 32-bit unsigned ints!");
-            const uint32_t height = DeserializeScalar<uint32_t>(FromSlice(keySlice));
+            const uint32_t height = DeserializeScalar<uint32_t, /*BigEndian=*/true>(FromSlice(keySlice));
             if (height < p->earliestUndoHeight) p->earliestUndoHeight = height;
             swissCheeseDetector.insert(height);
             ++ctr;
@@ -3099,6 +3154,11 @@ void Storage::loadCheckEarliestUndo()
         Debug() << "Undo db contains " << ctr << " entries, earliest is " << p->earliestUndoHeight.load() << ", "
                 << t0.msecStr(2) << " msec elapsed.";
     }
+    auto doBatchWrite = [this](rocksdb::WriteBatch &batch) {
+        if (auto st = p->db->Write(p->db.defWriteOpts, &batch); !st.ok()) [[unlikely]]
+            throw DatabaseError(QString("rocksdb::DB::Write returned an error: %1 ").arg(StatusString(st)));
+        p->db->SyncWAL();
+    };
     // Detect swiss cheese holes in the height range, and delete the unusable non-contiguous area from the undo db.
     // (This can happen in a very unlikely scenario where the user set max_reorg high then switched back to an old
     // Fulcrum version then switched to this new version again).
@@ -3117,10 +3177,14 @@ void Storage::loadCheckEarliestUndo()
         }
         // delete everything up until the first contiguous height we saw
         int delctr = 0;
+        rocksdb::WriteBatch batch;
         for (auto it = swissCheeseDetector.begin(); it != eraseUntil; ++delctr) {
-            GenericDBDelete(p->db, p->db.undo, uint32_t(*it));
+            GenericBatchDelete(batch, p->db.undo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(*it)));
             it = swissCheeseDetector.erase(it);
         }
+        if (delctr)
+            doBatchWrite(batch);
+
         p->earliestUndoHeight = !swissCheeseDetector.empty() ? *swissCheeseDetector.begin() : p->InvalidUndoHeight;
         ctr = swissCheeseDetector.size();
         if (delctr) {
@@ -3128,18 +3192,11 @@ void Storage::loadCheckEarliestUndo()
                       << p->earliestUndoHeight.load() << ", total undo entries now in db: " << ctr;
         }
     }
-    // heuristic to detect that the user changed the default on an already-synched dir
-    if (const auto legacy = Options::oldFulcrumReorgDepth; configuredUndoDepth() > legacy && ctr == legacy) {
-        Warning() << "You have specified max_reorg in the conf file as " << configuredUndoDepth() << "; older "
-                  << APPNAME << " versions may not cope well with this setting. As such, it is recommended that you "
-                  << "avoid using older versions of this program with this datadir now that you have set this option "
-                  << "beyond the default.";
-    }
     // sanity check that the latest Undo block deserializes correctly (detects older Fulcrum loading newer db)
     if (!swissCheeseDetector.empty()) {
         const uint32_t height = *swissCheeseDetector.rbegin();
         const QString errMsg(QString("Unable to read undo data for height %1").arg(height));
-        const UndoInfo undoInfo = GenericDBGetFailIfMissing<UndoInfo>(p->db, p->db.undo, height, errMsg);
+        const UndoInfo undoInfo = GenericDBGetFailIfMissing<UndoInfo>(p->db, p->db.undo, SerializeScalarEphemeral</*BigEndian=*/true>(height), errMsg);
         if (!undoInfo.isValid()) throw DatabaseFormatError(errMsg);
         Debug() << "Latest undo verified ok: " << undoInfo.toDebugString();
     }
@@ -3154,8 +3211,11 @@ void Storage::loadCheckEarliestUndo()
         Warning() << "Found " << ctr << " undo entries in db, but max_reorg is " << configuredUndoDepth() << "; "
                   << "deleting " << n2del << Util::Pluralize(" oldest entry", n2del) << " ...";
         const Tic t1;
+        rocksdb::WriteBatch batch;
         for (unsigned i = 0; i < n2del; ++i)
-            GenericDBDelete(p->db, p->db.undo, uint32_t(p->earliestUndoHeight++));
+            GenericBatchDelete(batch, p->db.undo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(p->earliestUndoHeight++)));
+        if (n2del)
+            doBatchWrite(batch);
         Warning() << n2del << Util::Pluralize(" undo entry", n2del) << " deleted from db in " << t1.msecStr() << " msec";
     }
 }
@@ -3559,7 +3619,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 // save BlkInfo to db
                 static const QString blkInfoErrMsg("Error writing BlkInfo to db");
-                GenericBatchPut(batch, p->db.blkinfo, uint32_t(ppb->height), blkInfo, blkInfoErrMsg);
+                GenericBatchPut(batch, p->db.blkinfo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(ppb->height)),
+                                blkInfo.toBytes(), blkInfoErrMsg);
 
                 if (undo) {
                     // save blkInfo to undo information, if in saveUndo mode
@@ -3579,7 +3640,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
                 static const QString errPrefix("Error saving undo info to undo db");
 
-                GenericBatchPut(batch, p->db.undo, uint32_t(ppb->height), *undo, errPrefix); // save undo to db
+                GenericBatchPut(batch, p->db.undo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(ppb->height)),
+                                *undo, errPrefix); // save undo to db
                 if (ppb->height < p->earliestUndoHeight) {
                     // remember earliest for delete clause below...
                     p->earliestUndoHeight = ppb->height;
@@ -3616,7 +3678,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 // keys as we catch up.  It's not the end of the world, as each call here is on the order of microseconds..
                 // but perhaps we need to see about fixing this to not do that.
                 static const QString errPrefix("Error deleting old/stale undo info from undo db");
-                GenericBatchDelete(batch, p->db.undo, uint32_t(expireUndoHeight), errPrefix);
+                GenericBatchDelete(batch, p->db.undo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(expireUndoHeight)), errPrefix);
                 p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
                 if constexpr (debugPrt) DebugM("Deleted undo for block ", expireUndoHeight, ", earliest now ", p->earliestUndoHeight.load());
             }
@@ -3757,7 +3819,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             prevHeader = *opt;
         }
         const QString errMsg1 = QStringLiteral("Unable to retrieve undo info for %1").arg(tip);
-        auto undoOpt = GenericDBGet<UndoInfo>(p->db, p->db.undo, uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
+        auto undoOpt = GenericDBGet<UndoInfo>(p->db, p->db.undo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(tip)),
+                                              true, errMsg1, false, p->db.defReadOpts);
         if (!undoOpt.has_value())
             throw UndoInfoMissing(errMsg1);
         auto & undo = *undoOpt; // non-const because we swap out its scripthashes potentially below if notifySubs == true
@@ -3781,7 +3844,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // undo the blkInfo from the back
             p->blkInfos.pop_back();
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
-            GenericBatchDelete(batch, p->db.blkinfo, uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
+            GenericBatchDelete(batch, p->db.blkinfo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(undo.height)),
+                               "Failed to delete blkInfo in undoLatestBlock");
             deleteRpaEntriesFromHeight(&batch, undo.height); // delete RPA >= undo.height (iff index is enabled)
 
             // clear num2hash cache
@@ -3851,7 +3915,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             if (p->earliestUndoHeight >= undo.height)
                 // oops, we're out of undos now!
                 p->earliestUndoHeight = p->InvalidUndoHeight;
-            GenericBatchDelete(batch, p->db.undo, uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
+            GenericBatchDelete(batch, p->db.undo, SerializeScalarEphemeral</*BigEndian=*/true>(uint32_t(undo.height))); // make sure to delete this undo info since it was just applied.
 
             // add all tx hashes that we are rolling back to the notify set for the txSubsMgr
             if (notify) {
@@ -4449,18 +4513,18 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                     bool ok;
                     auto shval = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
                     if (UNLIKELY(!ok || !shval.valid)) {
-                        auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                        auto ctxo = extractCompactTXOFromShunspentKey(key, false); /* may throw if size is bad, etc */
                         throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1, script_hash: %2")
                                             .arg(ctxo.toString(), QString(hashX.toHex())));
                     }
                     if (UNLIKELY(!bitcoin::MoneyRange(shval.amount))) {
-                        auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                        auto ctxo = extractCompactTXOFromShunspentKey(key, false); /* may throw if size is bad, etc */
                         throw InternalError(QString("Out-of-range amount in db for ctxo %1, script_hash %2: %3")
                                             .arg(ctxo.toString(), QString(hashX.toHex())).arg(shval.amount / shval.amount.satoshi()));
                     }
                     if (ShouldFilter(shval.tokenDataPtr))
                         continue;
-                    auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                    auto ctxo = extractCompactTXOFromShunspentKey(key, false); /* may throw if size is bad, etc */
                     ctxoVec.emplace_back(std::move(ctxo), std::move(shval));
                 }
                 for (auto & [ctxo, shval] : ctxoVec) {
@@ -4516,7 +4580,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
             rocksdb::Slice key;
             for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
                 IncrementCtrAndThrowIfExceedsMaxHistory(); // throw if we are iterating too much
-                const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // may throw if key has the wrong size, etc
+                const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key, false); // may throw if key has the wrong size, etc
                 bool ok;
                 const auto & [valid, amount, tokenDataPtr] = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
                 if (UNLIKELY(!ok || !valid))
@@ -4584,7 +4648,7 @@ auto Storage::getFirstUse(const HashX & hashX) const -> std::optional<FirstUse>
                 throw DatabaseSerializationError(QString("Scripthash %1 has a db entry in scripthash_history that is too short: %2")
                                                      .arg(QString::fromLatin1(hashX.toHex()), QString::fromLatin1(optba->toHex())));
             }
-            const TxNum txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(optba->constData()));
+            const TxNum txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(optba->constData()), /*bigEndian:*/false);
             // NB: Below opt.value() calls may throw, which is what we want.
             const BlockHeight blockHeight = heightForTxNum(txNum).value(); // may throw
             return FirstUse(hashForTxNum(txNum).value(), /* .txHash */
@@ -4884,60 +4948,70 @@ namespace {
         QByteArray ba;
         {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
-            // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
-            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain << m.platformBits << m.coin;
+            ds << m.magic << m.version << m.chain << m.platformBits << m.coin;
             if (m.isMinimumExtraPlatformInfoVersion()) {
                 ds << m.appName << m.appVersion << m.rocksDBVersion << m.buildABI << m.osName << m.cpuArch;
             }
         }
         return ba;
     }
-    template <> Meta Deserialize(const QByteArray &ba, bool *ok_ptr)
+    template <bool legacy> Meta Deserialize_Meta(const QByteArray &ba, bool *ok_ptr)
     {
         bool dummy;
         bool &ok (ok_ptr ? *ok_ptr : dummy);
         ok = false;
         Meta m(Meta::ClearedForUnser);
-        {
-            QDataStream ds(ba);
+        QDataStream ds(ba);
+        if constexpr (legacy) {
+            // Note that Fulcrum 1.x would serialize in host endian order here for magicBytes, as a QByteArray.
+            // Ensure that is the case (we will detect endian mismatch later in the 1.x -> 2.x upgrade codepath).
             QByteArray magicBytes;
             ds >> magicBytes; // read magic as raw bytes.
-            if ((ok = ds.status() == QDataStream::Status::Ok)) {
+            ok = ds.status() == QDataStream::Status::Ok;
+            if (ok) {
                 m.magic = DeserializeScalar<decltype (m.magic)>(magicBytes, &ok);
-                if (ok) {
-                    ds >> m.version >> m.chain;
-                    ok = ds.status() == QDataStream::Status::Ok;
-                    if (ok && !ds.atEnd()) {
-                        // TODO: make this field non-optional. For now we tolerate it missing since we added this field
-                        // later and we want to be able to still test on our existing db's.
-                        ds >> m.platformBits;
-                    }
-                    ok = ds.status() == QDataStream::Status::Ok;
-                    if (ok) {
-                        if (!ds.atEnd()) {
-                            // Newer db's will always either have an empty string "", "BCH", or "BTC" here.
-                            // Read the db value now. Client code gets this value via Storage::getCoin().
-                            ds >> m.coin;
+            }
+        } else {
+            // Fulcrum 2.x (non-legacy) serializes as default QDataStream byte order (which is big endian)
+            ds >> m.magic;
+            ok = ds.status() == QDataStream::Status::Ok;
+        }
+        if (!ok) return m;
+        ds >> m.version >> m.chain;
+        ok = ds.status() == QDataStream::Status::Ok;
+        if (ok && !ds.atEnd()) {
+            // TODO: make this field non-optional. For now we tolerate it missing since we added this field
+            // later and we want to be able to still use our existing db's.
+            ds >> m.platformBits;
+        }
+        ok = ds.status() == QDataStream::Status::Ok;
+        if (ok) {
+            if (!ds.atEnd()) {
+                // Newer db's will always either have an empty string "", "BCH", or "BTC" here.
+                // Read the db value now. Client code gets this value via Storage::getCoin().
+                ds >> m.coin;
 
-                            // If version >= 3, and magic ok, and no errors, proceed to read the extra platform info
-                            // which is new in db's with version 3 or above.
-                            ok = ds.status() == QDataStream::Status::Ok;
-                            if (ok && m.isMagicOk() && m.isMinimumExtraPlatformInfoVersion()) {
-                                ds >> m.appName >> m.appVersion >> m.rocksDBVersion >> m.buildABI >> m.osName >> m.cpuArch;
-                            }
-                        } else {
-                            // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data here as
-                            // "BCH" (since all older db's were always BCH only).
-                            m.coin = BTC::coinToName(BTC::Coin::BCH);
-                            Debug() << "Missing coin info from Meta table, defaulting coin to: \"" << m.coin << "\"";
-                        }
-                    }
-                    ok = ds.status() == QDataStream::Status::Ok;
+                // If version >= 3, and magic ok, and no errors, proceed to read the extra platform info
+                // which is new in db's with version 3 or above.
+                ok = ds.status() == QDataStream::Status::Ok;
+                if (ok && m.isMagicOk() && m.isMinimumExtraPlatformInfoVersion()) {
+                    ds >> m.appName >> m.appVersion >> m.rocksDBVersion >> m.buildABI >> m.osName >> m.cpuArch;
                 }
+            } else {
+                // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data here as
+                // "BCH" (since all older db's were always BCH only).
+                m.coin = BTC::coinToName(BTC::Coin::BCH);
+                Debug() << "Missing coin info from Meta table, defaulting coin to: \"" << m.coin << "\"";
             }
         }
+        ok = ds.status() == QDataStream::Status::Ok;
         return m;
     }
+
+    template <> Meta Deserialize(const QByteArray &ba, bool *ok_ptr) { return Deserialize_Meta<false>(ba, ok_ptr); }
+
+    template <> MetaLegacy Deserialize(const QByteArray &ba, bool *ok_ptr) { return Deserialize_Meta<true>(ba, ok_ptr); }
+
 
     template <> QByteArray Serialize(const TXO &txo) { return txo.toBytes(false); }
     template <> TXO Deserialize(const QByteArray &ba, bool *ok) {
@@ -4961,39 +5035,47 @@ namespace {
     }
 
     // essentially takes a byte copy of the data of BlkInfo; note that we waste some space at the end for legacy compat.
-    template <> QByteArray Serialize(const BlkInfo &b) {
-        static_assert(sizeof(BlkInfo) >= 12 && sizeof(b.txNum0) == 8 && sizeof(b.nTx) == 4,
+    // New in Fulcrum 2.x: we enforce endian-neutrality (little endian ints, etc)
+    QByteArray BlkInfo::toBytes(QByteArray *bufAppend) const {
+        static_assert(sizeof(BlkInfo) == 16 && sizeof(txNum0) == 8 && sizeof(nTx) == 4,
                       "Serialization of BlkInfo assumes 64-bit txNum0 and 32-bit nTx members");
-        QByteArray ret(QByteArray::size_type(sizeof(b)), Qt::Uninitialized);
-        auto *cur = ret.data();
-        std::memcpy(cur, &b.txNum0, sizeof(b.txNum0));
-        cur += sizeof(b.txNum0);
-        std::memcpy(cur, &b.nTx, sizeof(b.nTx));
-        cur += sizeof(b.nTx);
-        // On most platforms, the end is padded with 4 bytes because in previous versions of this code we wrote the raw
-        // BlkInfo struct to the byte array (which had padding for alignment). We don't do this anymore for
-        // privacy/security reasons but emulate the old behavior and pad with zeroes at the end.
-        ptrdiff_t padding = (ret.data() + ret.size()) - cur;
-        if (padding > 0) {
-            std::memset(cur, 0, padding);
-            cur += padding;
+        // This used to be written as a raw struct (not endian safe). Now we do it this way as little endian to
+        // be backward compatible with little endian platforms that did it the old way in Fulcrum 1.x.
+        // NOTE: Be sure to maintain the order of these fields for the struct else you will need to write update
+        // code.
+        QByteArray tmp;
+        QByteArray &buf = bufAppend ? *bufAppend : tmp;
+        if (!bufAppend) buf.reserve(sizeof(BlkInfo));
+        const auto origSize [[maybe_unused]] = buf.size();
+        {
+            QDataStream s(&buf, QIODevice::OpenModeFlag::WriteOnly|QIODevice::OpenModeFlag::Append);
+            s.setByteOrder(QDataStream::ByteOrder::LittleEndian); // for backward compat with old data
+            s << txNum0 << nTx;
         }
-        assert(cur == ret.data() + ret.size());
-        return ret;
+        // The end is padded with 4 bytes because in previous versions of this code we wrote the raw
+        // BlkInfo struct to the byte array (which had padding for alignment). We don't do this anymore
+        // for privacy/security reasons, but we emulate the old behavior and pad with zeroes at the end.
+        buf.append(QByteArray::size_type(4), char{0});
+        assert(buf.size() - origSize == 16);
+        return buf;
     }
+
     // will fail if the size doesn't match size of BlkInfo exactly
-    template <> BlkInfo Deserialize(const QByteArray &ba, bool *ok) {
+    template <> BlkInfo Deserialize(const QByteArray &ba, bool *ok_) {
         BlkInfo ret;
+        bool tmp;
+        bool & ok = ok_ ? *ok_ : tmp;
         if (ba.length() != sizeof(ret)) {
-            if (ok) *ok = false;
+            ok = false;
         } else {
-            if (ok) *ok = true;
+            ok = true;
             auto *cur = ba.constData();
-            std::memcpy(reinterpret_cast<std::byte *>(&ret.txNum0), cur, sizeof(ret.txNum0));
+            ret.txNum0 = DeserializeScalar<decltype(ret.txNum0)>(ShallowTmp(cur, sizeof(ret.txNum0)), &ok);
             cur += sizeof(ret.txNum0);
-            std::memcpy(reinterpret_cast<std::byte *>(&ret.nTx), cur, sizeof(ret.nTx));
+            ret.nTx = DeserializeScalar<decltype(ret.nTx)>(ShallowTmp(cur, sizeof(ret.nTx)), &ok);
             cur += sizeof(ret.nTx);
             assert(cur <= ba.constData() + ba.size());
+            if (!ok) ret = BlkInfo{}; // clear
         }
         return ret;
     }
@@ -5038,20 +5120,47 @@ namespace {
         /// computes the minimum size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
         size_t computeMinimumSize_V3() const { return computeTotalSize_V2(); }
         bool isLenMinimallySane_V3() const { return size_t(len) >= computeMinimumSize_V3(); }
+
+        QByteArray toBytes(QByteArray *bufAppend = nullptr) const {
+            // This used to be written as a raw struct (not endian safe). Now we do it this way as little endian to
+            // be backward compatible with little endian platforms that did it the old way in Fulcrum 1.x.
+            // NOTE: Be sure to maintain the order of these fields for the struct else you will need to write update
+            // code.
+            QByteArray tmp;
+            QByteArray &buf = bufAppend ? *bufAppend : tmp;
+            if (!bufAppend) buf.reserve(sizeof(*this));
+            {
+                QDataStream s(&buf, QIODevice::OpenModeFlag::WriteOnly|QIODevice::OpenModeFlag::Append);
+                s.setByteOrder(QDataStream::ByteOrder::LittleEndian); // for backward compat with old data
+                s << magic << ver << len << nScriptHashes << nAddUndos << nDelUndos;
+            }
+            return buf;
+        }
+
+        static UndoInfoSerHeader fromBytes(ByteView &bv, bool *ok = nullptr) {
+            const QByteArray qba = bv.toByteArray(false);
+            QDataStream s(qba);
+            s.setByteOrder(QDataStream::ByteOrder::LittleEndian); // for backward compat. with old data
+            UndoInfoSerHeader h{.magic = 0, .ver = 0};
+            s >> h.magic >> h.ver >> h.len >> h.nScriptHashes >> h.nAddUndos >> h.nDelUndos;
+            if (ok) *ok = s.status() == QDataStream::Status::Ok;
+            bv = bv.substr(sizeof(UndoInfoSerHeader)); // update read pos by modifying bv
+            return h;
+        }
     };
 
-    static_assert(std::has_unique_object_representations_v<UndoInfoSerHeader>, "This type is serialized as bytes to db");
+    static_assert(std::has_unique_object_representations_v<UndoInfoSerHeader> && sizeof(UndoInfoSerHeader) == 20,
+                  "This type is used to be serialized as raw bytes to the legacy db, so we need to maintain compat with that!");
 
     // Deserialize a header from bytes -- no checks are done other than length check.
     template <> UndoInfoSerHeader Deserialize(const QByteArray &ba, bool *ok) {
-        UndoInfoSerHeader ret;
-        if (ba.length() < int(sizeof(ret))) {
+        if (ba.length() < QByteArray::size_type(sizeof(UndoInfoSerHeader))) {
             if (ok) *ok = false;
+            return UndoInfoSerHeader{.magic = 0, .ver = 0};
         } else {
-            if (ok) *ok = true;
-            std::memcpy(reinterpret_cast<std::byte *>(&ret), ba.constData(), sizeof(ret));
+            ByteView bv(ba);
+            return UndoInfoSerHeader::fromBytes(bv, ok);
         }
-        return ret;
     }
 
     // UndoInfo -- serialize to V3 format (fixed 3-byte IONums, dynamically-sized TXOInfo objects)
@@ -5066,9 +5175,9 @@ namespace {
         QByteArray ret;
         ret.reserve(int(hdr.len));
         // 1. header
-        ret.append(ShallowTmp(&hdr));
+        hdr.toBytes(&ret);
         // 2. .height
-        ret.append(SerializeScalarNoCopy(u.height));
+        ret.append(SerializeScalarEphemeral(u.height));
         // 3. .hash
         const auto chkHashLen = [&ret](const QByteArray & hash) -> bool {
             if (hash.length() != HashLen) {
@@ -5081,8 +5190,7 @@ namespace {
         if (!chkHashLen(u.hash)) return ret;
         ret.append(u.hash);
         // 4. .blkInfo
-        const QByteArray blkInfoBytes = Serialize(u.blkInfo);
-        ret.append(blkInfoBytes);
+        u.blkInfo.toBytes(&ret);
         // 5. .scriptHashes, 32 bytes each, for all in set
         for (const auto & sh : u.scriptHashes) {
             if (UNLIKELY(!chkHashLen(sh))) return ret;
@@ -5091,9 +5199,9 @@ namespace {
         // 6. .addUndos, 76 bytes each * nAddUndos
         for (const auto & [txo, hashX, ctxo] : u.addUndos) {
             if (UNLIKELY(!chkHashLen(hashX))) return ret;
-            ret.append(txo.toBytes(true  /* force wide (3 byte IONum) */));
+            ret.append(txo.toBytes(/* force wide (3 byte IONum) = */true));
             ret.append(hashX);
-            ret.append(ctxo.toBytes(true /* force wide (3 byte IONum) */));
+            ret.append(ctxo.toBytes(/* force wide (3 byte IONum) = */true, /*bigEndian=*/false));
         }
         // 7. .delUndos, >=85 bytes each * nDelUndos
         for (const auto & [txo, txoInfo] : u.delUndos) {
@@ -5110,7 +5218,8 @@ namespace {
         }
         // 8. update length since serializing potential token data for each TXOInfo has variable size
         hdr.len = uint32_t(ret.length());
-        std::memcpy(ret.data() + offset_of_len, &hdr.len, sizeof(hdr.len));
+        const uint32_t len_le = Util::hToLe32(hdr.len);
+        std::memcpy(ret.data() + offset_of_len, &len_le, sizeof(len_le));
 
         return ret;
     }
@@ -5240,7 +5349,7 @@ namespace {
         }
         std::byte *cur = reinterpret_cast<std::byte *>(ret.data());
         for (const auto num : v) {
-            CompactTXO::txNumToCompactBytes(cur, num);
+            CompactTXO::txNumToCompactBytes(cur, num, /*bigEndian=*/false);
             cur += compactSize;
         }
         return ret;
@@ -5262,14 +5371,13 @@ namespace {
         auto * const end = reinterpret_cast<const std::byte *>(ba.constData() + blen);
         ret.reserve(N);
         for ( ; cur < end; cur += compactSize) {
-            ret.push_back( CompactTXO::txNumFromCompactBytes(cur) );
+            ret.push_back( CompactTXO::txNumFromCompactBytes(cur, /*bigEndian=*/false) );
         }
         return ret;
     }
 
-    //template <> QByteArray Serialize(const CompactTXO &c) { return c.toBytes(false); }
     template <> CompactTXO Deserialize(const QByteArray &b, bool *ok) {
-        CompactTXO ret = CompactTXO::fromBytes(b);
+        CompactTXO ret = CompactTXO::fromBytes(b, /*bigEndian=*/false);
         if (ok) *ok = ret.isValid();
         return ret;
     }
@@ -5280,7 +5388,7 @@ namespace {
         return ret;
     }
     template <> SHUnspentValue Deserialize(const QByteArray &ba, bool *pok) {
-        int pos = 0;
+        QByteArray::size_type pos = 0;
         bool ok;
         const int64_t amt = DeserializeScalar<int64_t>(ba, &ok, &pos);
         SHUnspentValue ret;

@@ -133,18 +133,18 @@ public:
         QByteArray ret;
         using QBASz = QByteArray::size_type;
         if (!isValid()) return ret;
-        const int64_t amt_sats = amount / bitcoin::Amount::satoshi();
-        const uint32_t cheight = confirmedHeight.value_or(kNoBlockHeight); // NB: earlier version of this code used int32_t(-1) here to indicate no cheight.
+        const uint64_t amt_sats_le = Util::hToLe64(amount / bitcoin::Amount::satoshi());
+        const uint32_t cheight_le = Util::hToLe32(confirmedHeight.value_or(kNoBlockHeight)); // NB: earlier version of this code used int32_t(-1) here to indicate no cheight.
         const QBASz minSize = static_cast<QBASz>(minSerSize());
         const QBASz rsvSize = minSize + (tokenDataPtr ? 1 + static_cast<QBASz>(tokenDataPtr->EstimatedSerialSize()) : 0);
         ret.reserve(rsvSize);
         ret.resize(minSize);
         char *cur = ret.data();
-        std::memcpy(cur, &amt_sats, sizeof(amt_sats));
-        cur += sizeof(amt_sats);
-        std::memcpy(cur, &cheight, sizeof(cheight));
-        cur += sizeof(cheight);
-        CompactTXO::txNumToCompactBytes(reinterpret_cast<std::byte *>(cur), txNum);
+        std::memcpy(cur, &amt_sats_le, sizeof(amt_sats_le));
+        cur += sizeof(amt_sats_le);
+        std::memcpy(cur, &cheight_le, sizeof(cheight_le));
+        cur += sizeof(cheight_le);
+        CompactTXO::txNumToCompactBytes(reinterpret_cast<std::byte *>(cur), txNum, /*bigEndian=*/false);
         cur += CompactTXO::compactTxNumSize(); // always 6
         std::memcpy(cur, hashX.constData(), size_t(hashX.length())); // always 32 (enforced by isValid() check above)
         // NOTE: `cur` may be invalidated below
@@ -158,19 +158,20 @@ public:
         if (size_t(ba.length()) < minSerSize()) {
             return ret;
         }
-        int64_t amt;
-        uint32_t cheight;
+        uint64_t amt_le;
+        uint32_t cheight_le;
         const char *cur = ba.constData();
-        std::memcpy(&amt, cur, sizeof(amt));
-        cur += sizeof(amt);
-        std::memcpy(&cheight, cur, sizeof(cheight));
-        cur += sizeof(cheight);
-        ret.txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(cur));
+        std::memcpy(&amt_le, cur, sizeof(amt_le));
+        cur += sizeof(amt_le);
+        std::memcpy(&cheight_le, cur, sizeof(cheight_le));
+        cur += sizeof(cheight_le);
+        ret.txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(cur), /*bigEndian=*/false);
         cur += CompactTXO::compactTxNumSize(); // always 6
         ret.hashX = QByteArray(cur, HashLen);
         cur += HashLen;
-        ret.amount = amt * bitcoin::Amount::satoshi();
-        if (cheight != kNoBlockHeight) // NB: earlier version of this code used int32_t(-1) here to indicate no cheight.
+        ret.amount = static_cast<int64_t>(Util::le64ToH(amt_le)) * bitcoin::Amount::satoshi();
+        const uint32_t cheight = Util::le32ToH(cheight_le);
+        if (cheight != kNoBlockHeight) // NB: earlier version of this code used int32_t(-1) here to indicate no cheight, which is the same as uint32_t(-1) byte-wise
             ret.confirmedHeight.emplace(cheight);
         try {
             ret.tokenDataPtr = BTC::DeserializeTokenDataWithPrefix(ba, cur - ba.constData());

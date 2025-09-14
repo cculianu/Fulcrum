@@ -537,43 +537,39 @@ Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
 
 Data model for Fulcrum:  (120 column editor width recommended here)
 
-Notes: TODO Make everything endian-neutral.
-       √ = endian-neutral
-       xK / xV / xKxV = Key and/or Value NOT endian-neutral (assumes little endian)
+Notes: Everything is endian-safe and the database data should be cross-platform safe.
 
-RocksDB: "meta" xV
+RocksDB: "meta" √
   Key: "dirty" Value: if present and value is single byte 0x01, database is in an inconsistent state
   Key: "rpa_needs_full_check" - Value: single byte 0x01 or 0x00
   Key: "meta" - Serialize struct Meta. Purpose: metadata and sanity checks (see Storage.cpp)
 
 RocksDB: "headers" √
   Purpose:  Data store for headers.
-  Key: Bucket number (big endian encoding always)
+  Key: Bucket number (VarIntBE encoding)
   Data layout:  Each header is 80 bytes and they are laid out 1 after the other in buckets of size 8. See
                 DBRecordArray.cpp for how this data layout works.
 
 RocksDB: "txnum2txhash" √
   Purpose:  Mapping of TxNum -> TxId(hash)
-  Key: Bucket number (big endian encoding always)
+  Key: Bucket number (VarIntBE encoding)
   Data layout: Each TxHash is 32 bytes and the hashes are laid out one after another in buckets of size 16.
                See DBRecordArray.cpp.
   Purpose: Maps a "txnum" to its 32-byte txid. Each tx on the blockchain has a monotonically increasing txnum based on
            where it appeared on the blockchain. Block 0, tx 0 has "txnum" 0, up until the last tx N in block 0, which
            has "txnum" N. Tx 0 in block 1 then follows with "txnum" N+1, and so on.
 
-RocksDB: "blkinfo" xKV
+RocksDB: "blkinfo" √
   Purpose:  Allow for undoing on reorg and store some metadata for each block
-  Key:  "num_blocks" -> value (uint32) one past the last block height saved (eg the latest valid block_height
-        to use above would be one less than this number).
-  Key:  block_height (serialized uint32 of the height in question) -> values:  txNum0, nTx
+  Key:  block_height (serialized uint32 of the height in question, big endian) -> values:  txNum0, nTx
 
   Discussion:  Undoing involves going to the height to undo, getting the list of scripthashes, then hitting the
     scripthash_history table (and other scripthash related tables) for each one touched and removing the history entry
     for this block.  TODO: Finish this section...
 
-RocksDB: "undo" xKV
+RocksDB: "undo" √
   We store max 10-1000 of these or so for undoing on reorg
-  Key: block_height (uint32) (see Storage.cpp)
+  Key: block_height (uint32, big endian) (see Storage.cpp)
   Value: a serialized structure that captures the undo info (see struct UnfoInfo in Storage.cpp).. such as
          scripthashes, txo outs, txo ins (spends), etc.  The idea is to be able to roll back the utxoset to the state
          it had before this block occurred, as well as roll back the scripthash history and the txids
@@ -584,13 +580,13 @@ RocksDB: "scripthash_history" √
   Value: An ordered list of unique txNums: 6-byte txNums (txNum [uint48] , ... ), for all tx's spending from or to
          a scripthash.
 
-RocksDB: "utxoset" xV
+RocksDB: "utxoset" √
   Purpose: Store unspent coins to be able to track scripthash history properly.
   Key: "prevoutHash+outN (see struct TXO) (34 or 35 bytes)
   Value:  8-byte amount , 32-byte hashX .. see struct TXOInfo.
 
-RocksDB: "scripthash_unspent" xV
-  Key: scripthash_raw_bytes + serialized CompactTXO (40 or 41 bytes)
+RocksDB: "scripthash_unspent" √
+  Key: scripthash_raw_bytes + serialized CompactTXO (big endian) (41 bytes)
   Value: 8-byte amount field (64-bit signed integer), plus optional tokenData (prefixed by 0xef)
 
   Comments: It turns out scanning by prefix over a table is blazingly fast in rocksdb, so we can easily do listunspent
@@ -600,18 +596,19 @@ RocksDB: "scripthash_unspent" xV
 RocksDB: "txhash2txnum" √
   Key: The last 6 bytes of the txhash in question (txhash bytes being in big endian byte order, i.e. JSON byte order).
   Value: One or more serialized VarInts. Each VarInt represents a "TxNum" (which tells us where the actual hash lives
-         in the txnum2txhash flat file).
+         in the txnum2txhash table).
 
   Comments: This table is basically a hash table of txhash -> txNum and it allows us to answer questions such as whether
     a particular tx exists in the blockchain, and if so, which block it was confirmed in.  Used by some of the newer
     RPCs. Note that to save space the keys of our hash table are just the last 6 bytes of the txhash, which is fine
     since collisions will be relatively rare for quite some time in the future. If there is a collision then simply
     there will be more than 1 VarInt(TxNum) in that particular bucket, and we have to check each txNum in the bucket
-    for that key in series versus the txnum flat-file.  The performance penalty for this is extremely small since the
-    txnum flat-file is extremely fast to query given a txNum.
+    for that key in series versus the txnum2txhash table. The performance penalty for this is extremely small since the
+    txnum2txhash is extremely fast to query given a txNum.
 
 RocksDB: "rpa" √
-  Purpose: store tx indices referenced by prefix in the Rpa::PrefixTable structure for allowing for reusable address queries
+  Purpose: Store tx indices referenced by prefix in the Rpa::PrefixTable structure for allowing for reusable address
+           queries.
   Key: 32-bit height (big endian byte order)
   Value: A single serialized Rpa::PrefixTable for this block height.
 
@@ -623,7 +620,7 @@ RocksDB: "rpa" √
 A note about ACID: (atomic, consistent, isolated, durable)
 
 Abrupt program termination is ok (becasue rocksdb uses journaling internally), so long as we didn't experience a
-complete OS crash. In order to guard against OS crashes, one would have to enable rocksdb synch flushing on writes,
-which degrades performance
+complete OS crash or abrupt power off. In order to guard against OS crashes, one would have to enable rocksdb synch
+flushing on writes, which degrades performance
 
 */

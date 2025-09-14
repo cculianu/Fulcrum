@@ -76,41 +76,57 @@ struct CompactTXO {
     /// Note that bufsz must be >= serializedSize(wide) (which is 8 or 9 bytes, depending if IONum > 65535).
     /// If wide == true, then the buffer must be 9 bytes (maxSize() bytes).
     /// Number of bytes written is returned (8 or 9), or 0 if bufsz to small.
-   size_t toBytesInPlace(std::byte *buf, size_t bufsz, bool wide) const noexcept {
+   size_t toBytesInPlace(std::byte *buf, size_t bufsz, bool wide, bool bigEndian) const noexcept {
         if (const auto sersize = serializedSize(wide); bufsz >= sersize) {
-            txNumToCompactBytes(buf, compact.txNum);
-            buf[6] = std::byte(compact.n >> 0u & 0xffu);
-            buf[7] = std::byte(compact.n >> 8u & 0xffu);
-            if (sersize == maxSize())
-                buf[8] = std::byte(compact.n >> 16u & 0xffu);
+            txNumToCompactBytes(buf, compact.txNum, bigEndian);
+            if (bigEndian) {
+                int offset = 0;
+                if (sersize == maxSize())
+                    buf[6 + offset++] = std::byte(compact.n >> 16u & 0xffu);
+                buf[6 + offset] = std::byte(compact.n >> 8u & 0xffu);
+                buf[7 + offset] = std::byte(compact.n >> 0u & 0xffu);
+            } else {
+                buf[6] = std::byte(compact.n >> 0u & 0xffu);
+                buf[7] = std::byte(compact.n >> 8u & 0xffu);
+                if (sersize == maxSize())
+                    buf[8] = std::byte(compact.n >> 16u & 0xffu);
+            }
             return sersize;
         }
         return 0;
     }
-    /// If wide == false, result is 8 or 9 bytes depending on how large N() is. If wide == true, then it's always 9 bytes.
-    QByteArray toBytes(bool wide) const {
+    /// If wide == false, result is 8 or 9 bytes depending on how large N() is. If wide == true, then it's always 9 bytes, 0 padded.
+    QByteArray toBytes(bool wide, bool bigEndian) const {
         // the below is excessively wordy but it forces 8 byte little-endian style serialization
         QByteArray ret(serializedSize(wide), Qt::Uninitialized);
-        toBytesInPlace(reinterpret_cast<std::byte *>(ret.data()), size_t(ret.size()), wide); // this should never fail
+        toBytesInPlace(reinterpret_cast<std::byte *>(ret.data()), size_t(ret.size()), wide, bigEndian); // this should never fail
         return ret;
     }
     /// passed-in bufsz must be either minSize() (for 2-byte IONum <= 65535) or maxSize() (for 3-byte IONum)!
-    static CompactTXO fromBytesInPlaceExactSizeRequired(const std::byte *buf, size_t bufsz)  {
+    static CompactTXO fromBytesInPlaceExactSizeRequired(const std::byte *buf, size_t bufsz, bool bigEndian)  {
         if (UNLIKELY(bufsz != minSize() && bufsz != maxSize()))
             throw InternalError(QString("CompactTXO::fromBytesInPlaceExactSizeRequired was given an invalid size: %1").arg(bufsz));
-        return fromBytes(QByteArray::fromRawData(reinterpret_cast<const char *>(buf), int(bufsz)));
+        return fromBytes(QByteArray::fromRawData(reinterpret_cast<const char *>(buf), int(bufsz)), bigEndian);
     }
     /// passed-in QByteArray must be exactly 8 or 9 bytes else nothing is converted
-    static CompactTXO fromBytes(const QByteArray &b) {
+    static CompactTXO fromBytes(const QByteArray &b, bool bigEndian) {
         // the below is excessively wordy but it forces 8 byte little-endian style deserialization
         CompactTXO ret;
         if (const auto sz = b.size(); sz == minSize() || sz == maxSize()) {
             static_assert (maxSize() - minSize() == 1, "Assumption here is that minSize and maxSize differ in size by 1");
             const std::byte * cur = reinterpret_cast<const std::byte *>(b.constData());
-            ret.compact.txNum = txNumFromCompactBytes(cur);
-            ret.compact.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8u);
-            if (sz == maxSize())
-                ret.compact.n |= IONum(IONum(cur[8]) << 16u);
+            ret.compact.txNum = txNumFromCompactBytes(cur, bigEndian);
+            if (bigEndian) {
+                int offset = 0;
+                ret.compact.n = 0;
+                if (sz == maxSize())
+                    ret.compact.n |= IONum(IONum(cur[6 + offset++]) << 16u);
+                ret.compact.n |= IONum(IONum(cur[6 + offset]) << 8u) | IONum(cur[7 + offset]);
+            } else {
+                ret.compact.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8u);
+                if (sz == maxSize())
+                    ret.compact.n |= IONum(IONum(cur[8]) << 16u);
+            }
         }
         return ret;
     }
@@ -118,24 +134,42 @@ struct CompactTXO {
     static constexpr size_t compactTxNumSize() noexcept { return 6; }
 
     /// Converts: TxNum (8 bytes) <- from a 6-byte buffer. Uses little-endian ordering.
-    static inline TxNum txNumFromCompactBytes(const std::byte bytes[6]) noexcept
+    static inline TxNum txNumFromCompactBytes(const std::byte bytes[6], bool bigEndian) noexcept
     {
-        return    (TxNum(bytes[0]) <<  0u)
-                | (TxNum(bytes[1]) <<  8u)
-                | (TxNum(bytes[2]) << 16u)
-                | (TxNum(bytes[3]) << 24u)
-                | (TxNum(bytes[4]) << 32u)
-                | (TxNum(bytes[5]) << 40u);
+        if (bigEndian) {
+            return    (TxNum(bytes[0]) << 40u)
+                    | (TxNum(bytes[1]) << 32u)
+                    | (TxNum(bytes[2]) << 24u)
+                    | (TxNum(bytes[3]) << 16u)
+                    | (TxNum(bytes[4]) <<  8u)
+                    | (TxNum(bytes[5]) <<  0u);
+        } else {
+            return    (TxNum(bytes[0]) <<  0u)
+                    | (TxNum(bytes[1]) <<  8u)
+                    | (TxNum(bytes[2]) << 16u)
+                    | (TxNum(bytes[3]) << 24u)
+                    | (TxNum(bytes[4]) << 32u)
+                    | (TxNum(bytes[5]) << 40u);
+        }
     }
     /// Converts: TxNum (8 bytes) -> into a 6-byte buffer. Uses little-endian ordering.
-    static inline void txNumToCompactBytes(std::byte bytes[6], TxNum num) noexcept
+    static inline void txNumToCompactBytes(std::byte bytes[6], TxNum num, bool bigEndian) noexcept
     {
-        bytes[0] = std::byte(num >>  0u & 0xffu);
-        bytes[1] = std::byte(num >>  8u & 0xffu);
-        bytes[2] = std::byte(num >> 16u & 0xffu);
-        bytes[3] = std::byte(num >> 24u & 0xffu);
-        bytes[4] = std::byte(num >> 32u & 0xffu);
-        bytes[5] = std::byte(num >> 40u & 0xffu);
+        if (bigEndian) {
+            bytes[0] = std::byte(num >> 40u & 0xffu);
+            bytes[1] = std::byte(num >> 32u & 0xffu);
+            bytes[2] = std::byte(num >> 24u & 0xffu);
+            bytes[3] = std::byte(num >> 16u & 0xffu);
+            bytes[4] = std::byte(num >>  8u & 0xffu);
+            bytes[5] = std::byte(num >>  0u & 0xffu);
+        } else {
+            bytes[0] = std::byte(num >>  0u & 0xffu);
+            bytes[1] = std::byte(num >>  8u & 0xffu);
+            bytes[2] = std::byte(num >> 16u & 0xffu);
+            bytes[3] = std::byte(num >> 24u & 0xffu);
+            bytes[4] = std::byte(num >> 32u & 0xffu);
+            bytes[5] = std::byte(num >> 40u & 0xffu);
+        }
     }
 };
 #if defined(__GNUC__) || defined(__clang__)
