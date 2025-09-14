@@ -1494,6 +1494,22 @@ void Storage::openOrCreateDB(bool bulkLoad)
     tableOptions.block_cache = rocksdb::NewLRUCache(options->db.maxMem /* capacity limit */, -1, false /* strict capacity limit=off, turning it on made db writes sometimes fail */);
     p->db.blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
     tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
+
+    // EXPERIMENTAL
+    static constexpr bool TWO_LEVEL_INDEX = false;
+    static constexpr auto SetupTwoLevelIndex [[maybe_unused]] = [](rocksdb::BlockBasedTableOptions &topts) {
+        topts.index_type = rocksdb::BlockBasedTableOptions::IndexType::kTwoLevelIndexSearch;
+        topts.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
+        topts.partition_filters = true;
+        topts.metadata_block_size = 4096;
+        topts.cache_index_and_filter_blocks = true;
+        topts.pin_top_level_index_and_filter = true;
+        topts.cache_index_and_filter_blocks_with_high_priority = true;
+        topts.pin_l0_filter_and_index_blocks_in_cache = true;
+    };
+    if constexpr (TWO_LEVEL_INDEX) SetupTwoLevelIndex(tableOptions);
+    // /EXPERIMENTAL
+
     std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
     // shared TableFactory for all column families
     opts.table_factory = tableFactory;
@@ -1518,7 +1534,10 @@ void Storage::openOrCreateDB(bool bulkLoad)
         rocksdb::BlockBasedTableOptions block_based_options;
         block_based_options.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
         block_based_options.data_block_hash_table_util_ratio = 0.75;
-        block_based_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
+        if constexpr (TWO_LEVEL_INDEX)
+            SetupTwoLevelIndex(block_based_options);
+        else
+            block_based_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
         block_based_options.block_cache = p->db.blockCache.lock();
         block_based_options.cache_index_and_filter_blocks = true;
         cfopts.table_factory.reset(rocksdb::NewBlockBasedTableFactory(block_based_options));
@@ -5047,11 +5066,8 @@ namespace {
         QByteArray &buf = bufAppend ? *bufAppend : tmp;
         if (!bufAppend) buf.reserve(sizeof(BlkInfo));
         const auto origSize [[maybe_unused]] = buf.size();
-        {
-            QDataStream s(&buf, QIODevice::OpenModeFlag::WriteOnly|QIODevice::OpenModeFlag::Append);
-            s.setByteOrder(QDataStream::ByteOrder::LittleEndian); // for backward compat with old data
-            s << txNum0 << nTx;
-        }
+        buf.append(SerializeScalarEphemeral</*bigEndian=*/false>(txNum0));
+        buf.append(SerializeScalarEphemeral</*bigEndian=*/false>(nTx));
         // The end is padded with 4 bytes because in previous versions of this code we wrote the raw
         // BlkInfo struct to the byte array (which had padding for alignment). We don't do this anymore
         // for privacy/security reasons, but we emulate the old behavior and pad with zeroes at the end.
