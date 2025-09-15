@@ -106,9 +106,8 @@ namespace Json {
     extern QByteArray serialize(const QVariant &v, unsigned prettyIndent = 0, unsigned indentLevel = 0);
 
     /// Returns a rough estimate of the amount of memory a particular JSON-compatible QVariant
-    /// consumes.  This is a Fulcrum extension (which may end up ported to the main lib -Calin).
-    /// Note that if the QVariant contains types we don't support for serialization, they will
-    /// be costed as simply sizeof(QVariant).
+    /// consumes. Note that if the QVariant contains types we don't support for serialization, they will be costed as
+    /// simply sizeof(QVariant).
     /// May throw NestingLimitExceeded if the supplied QVariant has a recursive nesting depth larger than 1024.
     extern qsizetype estimateMemoryFootprint(const QVariant &);
 
