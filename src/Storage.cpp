@@ -1965,9 +1965,9 @@ void Storage::checkFulc1xUpgradeDB()
                     // Convert the "height" key from little endian to big endian (should perform slightly better because it will be fully sorted)
                     bool ok;
                     const uint32_t height = DeserializeScalar<uint32_t, /*BigEndian=*/false>(FromSlice(iterin->key()), &ok);
-                    if (!ok || height > MAX_HEADERS)
+                    if (!ok || height >= MAX_HEADERS)
                         throw DatabaseFormatError(QString("Expected a key in table '%1' to be a serialized little-endian"
-                                                          " integer <= %3; instead got: %4 (hex: %2)")
+                                                          " integer < %3; instead got: %4 (hex: %2)")
                                                   .arg(name, QString::fromLatin1(FromSlice(iterin->key()).toHex())).arg(MAX_HEADERS).arg(height));
                     // convert to big endian encoding
                     keyToWrite = ToSlice(convertedKeyBytes.emplace(SerializeScalar</*BigEndian=*/true,
@@ -2695,9 +2695,9 @@ void Storage::loadCheckHeadersInDB()
     const Tic t0;
     {
         if (num > MAX_HEADERS)
-            throw DatabaseFormatError(QString("Header count (%1) in database exceeds MAX_HEADERS! This is likely due to"
+            throw DatabaseFormatError(QString("Header count (%1) in database exceeds MAX_HEADERS (%2)! This is likely due to"
                                               " a database format mistmatch. Delete the datadir and resynch it.")
-                                      .arg(num));
+                                          .arg(num).arg(MAX_HEADERS));
         // verify headers: hashPrevBlock must match what we actually read from db
         if (num) {
             Debug() << "Verifying " << num << " " << Util::Pluralize("header", num) << " ...";

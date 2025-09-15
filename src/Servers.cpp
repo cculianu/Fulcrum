@@ -2147,11 +2147,11 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::BatchI
     bool ok = false;
     unsigned height = l.front().toUInt(&ok); // arg0
     if (!ok || height >= Storage::MAX_HEADERS)
-        throw RPCError("Invalid height argument; expected non-negative numeric value");
+        throw RPCError(QString("Invalid height argument; expected non-negative numeric value < %1").arg(Storage::MAX_HEADERS));
     unsigned pos = l.at(1).toUInt(&ok); // arg1
-    constexpr unsigned MAX_POS = Storage::MAX_HEADERS;
+    constexpr unsigned MAX_POS = 1'000'000'000u; // limit this arg to 1 billion since that is way more than the number of txns that can exist in a block into the far future.
     if (!ok || pos >= MAX_POS)
-        throw RPCError("Invalid tx_pos argument; expected non-negative numeric value");
+        throw RPCError(QString("Invalid tx_pos argument; expected non-negative numeric value < %1").arg(MAX_POS));
     bool merkle = false;
     if (l.size() == 3) { //optional arg2
         const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );

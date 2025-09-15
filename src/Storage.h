@@ -109,8 +109,10 @@ public:
     using Header = QByteArray;
     using HeaderHash = QByteArray;
 
-    /// 100 million max headers for now.
-    static constexpr size_t MAX_HEADERS = 100'000'000;
+    /// 1 billion max headers. This limit is used in various sanity checks when reading parameters from RPC and when
+    /// checking sanity of data read-in from DB and has no other bearing on the application in terms of memory or disk
+    /// usage.
+    static constexpr size_t MAX_HEADERS = 1'000'000'000;
 
     /// Hard-coded to 100 blocks of undo in older Fulcrum.  Now it can be configured from a conf file setting: max_reorg
     inline unsigned configuredUndoDepth() const { return options->maxReorg; }
@@ -524,6 +526,8 @@ private:
     /// Safe to call multiple times at the very beginning of startup but not entirely safe to call
     /// after startup has commenced to phases where it starts to populate some Storage::Pvt structures.
     /// Will throw if it's called in such a context (defensive programming).
+    /// NOTE: If bulkLoad is true, the existing DB will be *completely deleted*, so do not use this flag lightly.
+    ///       Currently used by `checkFulc1xUpgradeDB()`.
     void openOrCreateDB(bool bulkLoad = false);
     /// Called from cleanup. Does some flushing and gently closes all open column families and closes the DB.
     void gentlyCloseDB();
@@ -629,6 +633,8 @@ A note about ACID: (atomic, consistent, isolated, durable)
 
 Abrupt program termination is ok (becasue rocksdb uses journaling internally), so long as we didn't experience a
 complete OS crash or abrupt power off. In order to guard against OS crashes, one would have to enable rocksdb synch
-flushing on writes, which degrades performance
+flushing on writes, which degrades performance. Instead, we accept rocksdb guarantees that data can be rolled-back
+to a consistent previous state, even on corrupted WAL file, which means so long as we stick to using a single
+WriteBatch for all column families when updating the DB, we will be fine.
 
 */

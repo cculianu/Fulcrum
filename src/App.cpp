@@ -1526,11 +1526,11 @@ void App::parseArgs()
         const QString confKey(b1 ? "rpa_start_height" : "rpa_starting_height");
         bool ok;
         int ht = conf.intValue(confKey, -1, &ok);
-        if (!ok || ht < -1 /* -1 ok, -2 not, etc*/ || (ht >= 0 && ht > int(Storage::MAX_HEADERS)))
+        if (!ok || ht < -1 /* -1 ok, -2 not, etc*/ || (ht >= 0 && ht >= long(Storage::MAX_HEADERS)))
             throw BadArgs(QString("%1: bad value. Specify a block height between [0, %2], or use -1 to"
                                   " auto-configure this setting with a chain-specific default (%3 for mainnet, %4 for"
                                   " all other nets).")
-                              .arg(confKey).arg(Storage::MAX_HEADERS).arg(Options::Rpa::defaultStartHeightForMainnet)
+                              .arg(confKey).arg(Storage::MAX_HEADERS-1u).arg(Options::Rpa::defaultStartHeightForMainnet)
                               .arg(Options::Rpa::defaultStartHeightOtherNets));
         options->rpa.requestedStartHeight = ht;
         // log this later in case we are in syslog mode
