@@ -1156,7 +1156,7 @@ struct Storage::Pvt
         std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
         std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
 
-        std::shared_ptr<StorageDetail::ConcatOperator> concatOperator, concatOperatorTxHash2TxNum,
+        std::shared_ptr<StorageDetail::ConcatOperator> concatOperatorShist, concatOperatorTxHash2TxNum,
                                                        concatOperatorTxNum2TxHash, concatOperatorHeaders;
 
         std::unique_ptr<rocksdb::DB> db; // the single database we open.
@@ -1559,7 +1559,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
     };
 
     shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
-    shistOpts.merge_operator = p->db.concatOperator = std::make_shared<StorageDetail::ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+    shistOpts.merge_operator = p->db.concatOperatorShist = std::make_shared<StorageDetail::ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
     OptimizeForPointLookup(shistOpts);
 
     txhash2txnumOpts = opts;
@@ -2330,7 +2330,7 @@ void Storage::gentlyCloseDB()
     if (!status.ok())
         Warning() << "Close of " << name << ": " << StatusString(status);
     // kill the concat operators we used
-    p->db.concatOperator = p->db.concatOperatorTxHash2TxNum = p->db.concatOperatorTxNum2TxHash = p->db.concatOperatorHeaders = nullptr;
+    p->db.concatOperatorShist = p->db.concatOperatorTxHash2TxNum = p->db.concatOperatorTxNum2TxHash = p->db.concatOperatorHeaders = nullptr;
     // delete db
     p->db.db.reset(db = nullptr);
 }
@@ -2350,9 +2350,9 @@ auto Storage::stats() const -> Stats
 {
     // TODO ... more stuff here, perhaps
     QVariantMap ret;
-    auto & c = p->db.concatOperator, & c2 = p->db.concatOperatorTxHash2TxNum, & c3 = p->db.concatOperatorTxNum2TxHash,
+    auto & c = p->db.concatOperatorShist, & c2 = p->db.concatOperatorTxHash2TxNum, & c3 = p->db.concatOperatorTxNum2TxHash,
          & c4 = p->db.concatOperatorHeaders;
-    ret["merge calls"] = c ? static_cast<quint64>(c->merges.load()) : QVariant();
+    ret["merge calls (scripthash_history)"] = c ? static_cast<quint64>(c->merges.load()) : QVariant();
     ret["merge calls (txhash2txnum)"] = c2 ? static_cast<quint64>(c2->merges.load()) : QVariant();
     ret["merge calls (txnum2txhash)"] = c3 ? static_cast<quint64>(c3->merges.load()) : QVariant();
     ret["merge calls (headers)"] = c4 ? static_cast<quint64>(c4->merges.load()) : QVariant();
