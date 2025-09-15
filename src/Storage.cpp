@@ -1501,10 +1501,9 @@ void Storage::openOrCreateDB(bool bulkLoad)
     rocksdb::BlockBasedTableOptions tableOptions;
     tableOptions.block_cache = rocksdb::NewLRUCache(options->db.maxMem /* capacity limit */, -1, false /* strict capacity limit=off, turning it on made db writes sometimes fail */);
     p->db.blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
-    tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
+    tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, which is why we do the two-level index below
 
-    // EXPERIMENTAL
-    static constexpr bool TWO_LEVEL_INDEX = false;
+    static constexpr bool TWO_LEVEL_INDEX = true; // enabled for now -- appears to help with performance
     static constexpr auto SetupTwoLevelIndex [[maybe_unused]] = [](rocksdb::BlockBasedTableOptions &topts) {
         topts.index_type = rocksdb::BlockBasedTableOptions::IndexType::kTwoLevelIndexSearch;
         topts.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
@@ -1515,12 +1514,12 @@ void Storage::openOrCreateDB(bool bulkLoad)
         topts.cache_index_and_filter_blocks_with_high_priority = true;
         topts.pin_l0_filter_and_index_blocks_in_cache = true;
     };
-    if constexpr (TWO_LEVEL_INDEX) SetupTwoLevelIndex(tableOptions);
-    // /EXPERIMENTAL
 
-    std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
+    if constexpr (TWO_LEVEL_INDEX)
+        SetupTwoLevelIndex(tableOptions);
+
     // shared TableFactory for all column families
-    opts.table_factory = tableFactory;
+    opts.table_factory.reset(rocksdb::NewBlockBasedTableFactory(tableOptions));
 
     // setup shared write buffer manager (for memtables memory budgeting)
     // - TODO right now we fix the cap of the write buffer manager's buffer size at db.maxMem / 2; tweak this.
@@ -1531,7 +1530,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
     // create the DB if it's not already present
     opts.create_if_missing = true;
     opts.error_if_exists = false;
-    opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
+    opts.compression = rocksdb::CompressionType::kNoCompression; // for now we go without compression. TODO: characterize what is fastest and best..
     if (!bulkLoad) {
         opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
         opts.keep_log_file_num = options->db.keepLogFileNum;
@@ -1694,7 +1693,6 @@ void Storage::openOrCreateDB(bool bulkLoad)
 void Storage::checkFulc1xUpgradeDB()
 {
     // ---- Fulcrum 1.x DB upgrade test code ----
-    // TODO REFACTOR XXX This is here for testing (for now)
 
     // Ensure "meta" column family is first (below code relies on this invariant)
     if (p->db.colFamsTableFind("meta") != p->db.colFamsTable.begin())
@@ -3662,7 +3660,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             // save the last of the undo info, if in saveUndo mode
             if (undo) {
-                const auto t0 = Util::getTimeNS();
+                const Tic t0;
                 undo->hash = BTC::HashRev(rawHeader);
                 undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
                 static const QString errPrefix("Error saving undo info to undo db");
@@ -3686,12 +3684,12 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     Debug() << "Undo info 2: " << undo2.toDebugString();
                     Debug() << "Undo info 1 == undo info 2: " << (*undo == undo2);
                 } else {
-                    const auto elapsedms = (Util::getTimeNS() - t0)/1e6;
+                    const auto elapsedms = t0.msecStr(2);
                     const size_t nTx = undo->blkInfo.nTx, nSH = undo->scriptHashes.size();
                     Debug() << "Saved V3 undo for block " << undo->height << ", "
                             << nTx << " " << Util::Pluralize("transaction", nTx)
                             << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
-                            << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
+                            << ", in " << elapsedms << " msec.";
                 }
             }
             // Expire old undos >configuredUndoDepth() blocks ago to keep the db tidy.
@@ -3735,7 +3733,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         // If we are in "notify" mode then it's after initial synch, so be cautious and do SyncWAL for each block for
         // safety despite the potential tiny performance hit here.
-        if (notify) p->db->SyncWAL();
+        if (notify)
+            p->db->SyncWAL();
 
     } /// release locks
 
@@ -3808,7 +3807,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
-        const auto t0 = Util::getTimeNS();
+        const Tic t0;
 
         // NOTE: For very full mempools, this clear has the potential to stall the app after the reorg
         // completes since the app will have to re-download the whole mempool state again.
@@ -3975,7 +3974,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 throw DatabaseError(QString("Batch write fail for undo of block height %1: %2")
                                         .arg(tip).arg(StatusString(st)));
 
-            p->db->SyncWAL(); // TODO verify this is needed, for now we can be paranoid and use this
+            p->db->SyncWAL();
 
             nSH = undo.scriptHashes.size();
 
@@ -3988,11 +3987,11 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         }
 
         const size_t nTx = undo.blkInfo.nTx;
-        const auto elapsedms = (Util::getTimeNS() - t0) / 1e6;
+        const auto elapsedms = t0.msecStr(2);
         Log() << "Applied undo for block " << undo.height << " hash " << Util::ToHexFast(undo.hash) << ", "
               << nTx << " " << Util::Pluralize("transaction", nTx)
               << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
-              << ", in " << QString::number(elapsedms, 'f', 2) << " msec, new height now: " << prevHeight;
+              << ", in " << elapsedms << " msec, new height now: " << prevHeight;
 
         // If we are in "notify" mode then it's after initial synch, so be cautious and do SyncWAL for each block undo
         // for safety despite the potential tiny performance hit here.
