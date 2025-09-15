@@ -19,8 +19,10 @@
 #include "CoTask.h"
 #include "Util.h"
 
-CoTask::CoTask(const QString &name_)
-    : name{name_}
+#include <QTextStream>
+
+CoTask::CoTask(const QString &name_, bool statsInCallingThread_)
+    : name{name_}, statsInCallingThread{statsInCallingThread_}
 {
     thr = std::thread([this] {
         if (!name.isEmpty()) Util::ThreadName::Set(name);
@@ -39,6 +41,8 @@ CoTask::~CoTask()
         }
         thr.join();
     }
+    if (isPrintStatsInCallingThread() && !statsMsg.isEmpty())
+        DebugM((!name.isEmpty() ? name + ": " : QString()) + statsMsg);
 }
 
 void CoTask::thrFunc()
@@ -47,9 +51,14 @@ void CoTask::thrFunc()
     const Tic t0;
     qint64 nsecsProcessing = 0;
     unsigned ctr = 0;
-    Defer d([&t0, &ctr, &nsecsProcessing] {
-        DebugM("CoTask thread exited, ran ", ctr, Util::Pluralize(" job", ctr), ", processing time: ",
-               QString::number(nsecsProcessing / 1e9, 'f', 3), " secs, elapsed total: ", t0.secsStr(1), " secs");
+    Defer d([&t0, &ctr, &nsecsProcessing, this] {
+        if (!Debug::isEnabled()) return;
+        QString msg;
+        QTextStream(&msg) << "CoTask thread exited, ran " << ctr << Util::Pluralize(" job", ctr)
+                          << ", processing time: " << QString::number(nsecsProcessing / 1e9, 'f', 3)
+                          << " secs, elapsed total: " << t0.secsStr(1) << " secs";
+        if (isPrintStatsInCallingThread()) statsMsg = std::move(msg);
+        else Debug() << msg;
     });
     std::unique_lock lock(mut);
     for (;;) {

@@ -89,6 +89,7 @@ public:
     /// Type used internally by the putRpaIndex signal
     struct RpaOnlyModeData {
         BlockHeight height{};
+        BlockHash hash;
         QByteArray serializedPrefixTable;
         size_t nTx{}, nTxsIndexed{}, nIns{}, nInsIndexed{}, nOuts{}, rawBlockSizeBytes{};
     };

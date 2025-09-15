@@ -517,7 +517,7 @@ struct DownloadBlocksTask : CtlTask
     // given a block height, return the index into our array
     size_t height2Index(size_t h) { return size_t( ((h-from) + stride-1) / stride ); }
 protected:
-    virtual VarDLTaskResult process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock);
+    virtual VarDLTaskResult process_block_guts(unsigned bnum, const BlockHash &bhash, const QByteArray &rawblock, const bitcoin::CBlock &cblock);
 };
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, int rpaHeight, Controller *ctl_)
@@ -582,7 +582,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         try {
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowCashTokens, allowMimble /* throw if junk at end if Litecoin (catch deser. bugs) */);
                             {
-                                VarDLTaskResult var = process_block_guts(bnum, rawblock, cblock);
+                                VarDLTaskResult var = process_block_guts(bnum, hash, rawblock, cblock);
                                 std::visit(
                                     Overloaded{
                                         [&](PreProcessedBlockPtr & p) { maybe_ppb = std::move(p); },
@@ -713,7 +713,8 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 // This has been refactored out of do_get() above to offer polymorphic subclasses the ability to also leverage
 // the DownloadBlocksTask to get blocks to synch various things (such as synching the RPA index if it is detected to
 // be out-of-synch due to configuration change, etc).
-VarDLTaskResult DownloadBlocksTask::process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock)
+VarDLTaskResult DownloadBlocksTask::process_block_guts(unsigned bnum, const BlockHash &bhash, const QByteArray &rawblock,
+                                                       const bitcoin::CBlock &cblock)
 {
     CoTask * rpaTaskIfEnabledForThisBlock = nullptr;
     // Determine if RPA indexing is enabled for this block, and if so, ensure this->rpaTask is created and pass down a
@@ -724,7 +725,7 @@ VarDLTaskResult DownloadBlocksTask::process_block_guts(unsigned bnum, const QByt
         rpaTaskIfEnabledForThisBlock = &*rpaTask;
     }
 
-    auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock, rpaTaskIfEnabledForThisBlock);
+    auto ppb = PreProcessedBlock::makeShared(bnum, bhash, size_t(rawblock.size()), cblock, rpaTaskIfEnabledForThisBlock);
 
     if (UNLIKELY(rpaIsEnabledForThisBlock && bnum == unsigned(rpaStartHeight))) {
         Util::AsyncOnObject(ctl, [height = rpaStartHeight]{
@@ -742,13 +743,16 @@ struct DownloadBlocksTask_SynchRpa : DownloadBlocksTask
 {
     using DownloadBlocksTask::DownloadBlocksTask;
 protected:
-    VarDLTaskResult process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock) override final;
+    VarDLTaskResult process_block_guts(unsigned bnum, const BlockHash &bhash, const QByteArray &rawblock, const bitcoin::CBlock &cblock) override final;
 };
 
-VarDLTaskResult DownloadBlocksTask_SynchRpa::process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock)
+VarDLTaskResult DownloadBlocksTask_SynchRpa::process_block_guts(unsigned bnum, const BlockHash &bhash,
+                                                                const QByteArray &rawblock,
+                                                                const bitcoin::CBlock &cblock)
 {
     Controller::RpaOnlyModeDataPtr ret = std::make_shared<Controller::RpaOnlyModeData>();
     ret->height = bnum;
+    ret->hash = bhash;
     ret->rawBlockSizeBytes = rawblock.size();
     const auto vtxSize = ret->nTx = cblock.vtx.size();
     Rpa::PrefixTable pt;
@@ -1531,7 +1535,7 @@ void Controller::process_DownloadingBlocks()
                 assert(romd->height+1u == sm->dlResultsHtNext); // paranoia -- should never happen
                 isRpa = true;
                 try {
-                    storage->addRpaDataForHeight(romd->height, romd->serializedPrefixTable);
+                    storage->addRpaDataForHeight(romd->height, romd->hash, romd->serializedPrefixTable);
                 } catch (const std::exception &e) {
                     Fatal() << "Caught exception after call to addRpaDataForHeight: " << e.what();
                     return false;

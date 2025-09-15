@@ -120,11 +120,15 @@ public:
 
     /// Thread safe. May hit the database (or touch a cache).  Returns the header for the given height or nothing if
     /// height > latestTip().first.  May also fail on low-level db error. Use the optional arg *err to see why if failed.
-    std::optional<Header> headerForHeight(BlockHeight height, QString *err = nullptr) const;
+    /// On successful header retrieval, optional arg `hashOut` will contain the header hash.
+    std::optional<Header> headerForHeight(BlockHeight height, QString *err = nullptr, HeaderHash *hashOut = nullptr) const;
     /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
     /// all headers were found. Thread safe.  This is potentially much faster than calling headerForHeight in a loop
     /// since it uses the RocksDB MultiGet API. Does not throw.
     std::vector<Header> headersFromHeight(BlockHeight height, unsigned count, QString *err = nullptr) const;
+
+    /// Convenience. Given a block height, return the block hash.
+    std::optional<HeaderHash> hashForHeight(BlockHeight height, QString *err = nullptr) const;
 
     /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
     ///   .first - the latest valid height we have synched or -1 if no headers.
@@ -399,7 +403,7 @@ public:
     std::optional<HeightRange> getRpaDBHeightRange() const;
 
     /// Called by Controller as it does its independent RPA synch. Thread-safe (takes blocksLock).
-    void addRpaDataForHeight(BlockHeight height, const QByteArray &serializedRpaPrefixTable);
+    void addRpaDataForHeight(BlockHeight height, const BlockHash &blockHash, const QByteArray &serializedRpaPrefixTable);
 
     /// Called by Controller. Ensures the RPA db doesn't have entries outside the range [from, to]. In other words,
     /// deletes all entries < from and all entries > to.
@@ -531,7 +535,8 @@ private:
     std::optional<unsigned> heightForTxNum_nolock(TxNum) const;
 
     /// Writes to the RPA table. Called from addBlock()
-    void addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, BlockHeight height, const QByteArray &serializedRpaPrefixTable);
+    void addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, BlockHeight height, const BlockHash &blockHash,
+                                    const QByteArray &serializedRpaPrefixTable);
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
@@ -613,7 +618,7 @@ RocksDB: "rpa" √
   Purpose: Store tx indices referenced by prefix in the Rpa::PrefixTable structure for allowing for reusable address
            queries.
   Key: 32-bit height (big endian byte order)
-  Value: A single serialized Rpa::PrefixTable for this block height.
+  Value: A 4-byte "short blockHash" followed by the compressed serialized Rpa::PrefixTable for this block height.
 
   Comments: The Rpa::PrefixTable stores 24-bit txIdx values in a table containing 65536 (possibly empty) rows for
     supporting up to 16-bit integer prefixes. See Rpa.h.

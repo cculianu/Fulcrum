@@ -37,8 +37,10 @@ class CoTask
 public:
     const QString name;
 
-    CoTask(const QString &name = {});
+    CoTask(const QString &name = {}, bool printsStatsInCallingThread = false);
     ~CoTask();
+
+    bool isPrintStatsInCallingThread() const { return statsInCallingThread; }
 
     // A wrapper for future that automatically waits for the wrapped future on destruction.
     struct Future {
@@ -84,6 +86,8 @@ private:
     std::promise<void> prom;
     std::atomic_bool pleaseStop{false};
     std::function<void()> work;
+    const bool statsInCallingThread;
+    QString statsMsg;
 
     void thrFunc();
     /// requires mutex be held when called -- it's here to make the above public section less cluttered

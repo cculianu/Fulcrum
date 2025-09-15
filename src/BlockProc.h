@@ -44,6 +44,7 @@ using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clari
 struct PreProcessedBlock
 {
     BlockHeight height = 0; ///< the height (block number) of the block
+    BlockHash hash; ///< the block hash, little endian byte order (same byte order as string repr)
     size_t sizeBytes = 0; ///< the size of the original serialized block in bytes (not the size of this data structure which is significantly smaller)
     size_t estimatedThisSizeBytes = 0; ///< the estimated size of this data structure -- may be off by a bit but is useful for rough estimation of memory costs of block processing
     /// deserialized header as came in from bitcoind
@@ -164,17 +165,19 @@ struct PreProcessedBlock
 
     // c'tors, etc... note this class is fully copyable and moveable
     PreProcessedBlock() = default;
-    PreProcessedBlock(BlockHeight bheight, size_t rawBlockSizeBytes, const bitcoin::CBlock &b, CoTask *rpaTask /* nullable */) {
-        fill(bheight, rawBlockSizeBytes, b, rpaTask);
+    PreProcessedBlock(BlockHeight bheight, const BlockHash &bhash, size_t rawBlockSizeBytes, const bitcoin::CBlock &b,
+                      CoTask *rpaTask /* nullable */) {
+        fill(bheight, bhash, rawBlockSizeBytes, b, rpaTask);
     }
     /// reset this to empty
     inline void clear() { *this = PreProcessedBlock(); }
     /// fill this block with data from bitcoin's CBlock
-    void fill(BlockHeight blockHeight, size_t rawSizeBytes, const bitcoin::CBlock &b, CoTask *rpaTask /* nullable */);
+    void fill(BlockHeight blockHeight, const BlockHash &blockHash, size_t rawSizeBytes, const bitcoin::CBlock &b,
+              CoTask *rpaTask /* nullable */);
 
     /// convenience factory static method: given a block, return a shard_ptr instance of this struct
-    static PreProcessedBlockPtr makeShared(unsigned height, size_t sizeBytes, const bitcoin::CBlock &block,
-                                           CoTask *rpaTask /* nullable */);
+    static PreProcessedBlockPtr makeShared(unsigned height, const BlockHash &hash, size_t sizeBytes,
+                                           const bitcoin::CBlock &block, CoTask *rpaTask /* nullable */);
 
     /// debug string
     QString toDebugString() const;

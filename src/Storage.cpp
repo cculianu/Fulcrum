@@ -159,11 +159,16 @@ namespace {
         cpuArch = QSysInfo::currentCpuArchitecture();
     }
 
+    static const QString kDBName = "fulc2_db"; // the entire db lives in this subdirectory in `datadir`
+
     // Some database keys we use in the `Meta` table; if this grows large, move it elsewhere.
     static const bool falseMem = false, trueMem = true;
     static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"}, kRpaNeedsFullCheck{"rpa_needs_full_check"},
                                 kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
                                 kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(falseMem));
+
+    static constexpr QByteArray::size_type kRpaShortBlockHashLen = 4; // Changing this will cause RPA DB format incompatibility
+    static_assert(kRpaShortBlockHashLen <= HashLen);
 
     template <typename T>
     concept NonPointer = !std::is_pointer_v<std::remove_cv_t<T>>;
@@ -1180,13 +1185,14 @@ struct Storage::Pvt
         const std::vector<std::pair<std::string, ColFamSpecificRefs>> colFamsTable = {
             { "meta",               {.handle = meta,         .options = opts} }, // NB: this *must* be first
             { "blkinfo",            {.handle = blkinfo,      .options = opts} },
+            { "headers",            {.handle = headers,      .options = headersOpts,      .dra = &headersDRA} },
             { "utxoset",            {.handle = utxoset,      .options = utxosetOpts} },
             { "scripthash_history", {.handle = shist,        .options = shistOpts} },
             { "scripthash_unspent", {.handle = shunspent,    .options = opts} },
             { "undo",               {.handle = undo,         .options = opts} },
             { "txnum2txhash",       {.handle = txnum2txhash, .options = txnum2txhashOpts, .dra = &txNumsDRA} },
-            { "headers",            {.handle = headers,      .options = headersOpts,      .dra = &headersDRA} },
             { "txhash2txnum",       {.handle = txhash2txnum, .options = txhash2txnumOpts} },
+            // Note: For Fulc1x import to work 100%, `rpa` below must come *after* `headers` above
             { "rpa",                {.handle = rpa,          .options = opts} },
         };
         auto colFamsTableFind(std::string_view name) {
@@ -1578,8 +1584,17 @@ void Storage::openOrCreateDB(bool bulkLoad)
 
     // First, open the DB, and then determine which column families it has, and open them all.
     {
-        const QString mainDBName = "fulc2_db";
-        const QString path = options->datadir + QDir::separator() + mainDBName;
+        const QString path = options->datadir + QDir::separator() + kDBName;
+
+        if (bulkLoad) {
+            // For bulkLoad mode, we should just start with a clean slate. rm -fr the current DB
+            QDir existingDB(path);
+            if (existingDB.exists()) {
+                Debug() << "BulkLoad mode requires a fresh DB; deleting existing directory \"" << path << "\" ...";
+                if (!existingDB.removeRecursively()) throw InternalError("Error removing directory: " + path);
+            }
+        }
+
         rocksdb::Status s;
 
         std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
@@ -1610,7 +1625,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
                     sstr = " (new db)";
                 else
                     sstr = ": " + StatusString(s);
-                Debug() << "Failed to list column families for DB '" << mainDBName << "'" << sstr;
+                Debug() << "Failed to list column families for DB '" << kDBName << "'" << sstr;
                 // Might as well specify that we want to open the "default" column family here
                 colFamDescs.emplace_back(rocksdb::kDefaultColumnFamilyName, opts);
             }
@@ -1621,7 +1636,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
         p->db.db.reset(db);
         if (!s.ok() || !db)
             throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
-                                    .arg(mainDBName, StatusString(s), path));
+                                    .arg(kDBName, StatusString(s), path));
     }
 
     rocksdb::DB * const db = p->db;
@@ -1840,6 +1855,7 @@ void Storage::checkFulc1xUpgradeDB()
         }
     };
 
+    std::optional<std::vector<QByteArray>> shortBlockHashes; // calculated for us as we import `headers` and used by the rpa table import
 
     for (const auto & [sname, info] : p->db.colFamsTable) {
         const auto name = QString::fromStdString(sname);
@@ -1868,8 +1884,8 @@ void Storage::checkFulc1xUpgradeDB()
             std::optional<QByteArray> convertedDbMetaSerialization; // upgraded/converted 'kMeta' row (class: Meta)
 
             const bool isTableRequiringLEtoBEKeyConv = info.handle == p->db.undo || info.handle == p->db.blkinfo;
-
             const bool isShunspentTable = info.handle == p->db.shunspent;
+            const bool isRpaTable = info.handle == p->db.rpa;
 
             // If encountering the "meta" table (which is always first!), check that Fulcrum 1.x did not have the DB
             // flaged as "dirty".
@@ -1889,6 +1905,9 @@ void Storage::checkFulc1xUpgradeDB()
                 Debug() << name << " table conversion will take place; will convert all height keys to big endian";
             else if (isShunspentTable)
                 Debug() << name << " table conversion will take place; will convert all hashx:ctxo keys to use big-endian encoding for ctxos";
+            else if (isRpaTable)
+                Debug() << name << " table conversion will take place; will convert all values to have the "
+                        << kRpaShortBlockHashLen << "-byte shortBlockHash prefix";
 
             // Everything so far ok, create an iterator over the input DB table
             auto rdOpts = p->db.defReadOpts;
@@ -1915,8 +1934,9 @@ void Storage::checkFulc1xUpgradeDB()
                 Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
                 if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
                     lastPrt = now;
-                    const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
-                    Log() << "Progress: " << totalCt << " rows, " << mb << " MB, in " << t0.secsStr() << " secs";
+                    const auto & [scaled, unit] = Util::ScaleBytes(byteCt);
+                    const auto scaledStr = QString::number(scaled, 'f', unit != "bytes" ? 1 : 0);
+                    Log() << "Progress: " << totalCt << " rows, " << scaledStr << " " << unit << ", in " << t0.secsStr() << " secs";
                 }
                 ++totalBatchCt;
                 batchCt = 0;
@@ -1928,7 +1948,7 @@ void Storage::checkFulc1xUpgradeDB()
                 // - `undo` & `blkinfo` table: All keys get converted from little endian -> big endian encoding (for better sorting)
                 // - `shunspent` table: All keys get reformated with uniform-sized keys and the CompactTXO is serialized in big-endian order for better sorting.
                 rocksdb::Slice keyToWrite = iterin->key(), valueToWrite = iterin->value();
-                std::optional<QByteArray> convertedKeyBytes;
+                std::optional<QByteArray> convertedKeyBytes, convertedValueBytes;
                 if (isMetaTable) [[unlikely]]  {
                     if (keyToWrite == kDirty) {
                         // do *not* copy the dirty flag for the meta table so as to not clear the fact that we are "dirty" now...
@@ -1957,6 +1977,27 @@ void Storage::checkFulc1xUpgradeDB()
                     const auto & [hashX, ctxo] = extractShunspentKey(iterin->key(), /*legacy=*/true); // parse legacy key; may throw
                     keyToWrite = ToSlice(convertedKeyBytes.emplace(mkShunspentKey(hashX, ctxo))); // convert to latest format
                     ++totalConvCt;
+                } else if (isRpaTable) {
+                    try {
+                        bool ok = false;
+                        const uint32_t height = Deserialize<RpaDBKey>(FromSlice(keyToWrite), &ok).height;
+                        if (!ok) [[unlikely]] throw Exception("Failed to deserialize RpaDBKey");
+                        if (!shortBlockHashes) [[unlikely]] throw Exception("No `shortBlockHashes` exists. Was table `headers` imported yet?");
+                        if (height >= shortBlockHashes->size()) [[unlikely]] {
+                            Debug() << "Got rpa entry for height: " << height << ", which is >= the shortBlockHashes"
+                                    << " size of: " << shortBlockHashes->size() << ", skipping ...";
+                            continue; // skip this row
+                        }
+                        convertedValueBytes.emplace().reserve(kRpaShortBlockHashLen + valueToWrite.size());
+                        convertedValueBytes->append((*shortBlockHashes)[height]);
+                        convertedValueBytes->append(FromSlice(valueToWrite));
+                        valueToWrite = ToSlice(*convertedValueBytes); // make the valueToWrite slice point to our new buffer
+                    } catch (const std::exception &e) {
+                        Warning() << "Got an exception in processing a row for the RPA table, aborting RPA data import"
+                                  << "early. Exception: " << e.what();
+                        break; // break out of enclosing for() loop that iterates over the rpa table
+                    }
+                    ++totalConvCt;
                 }
                 const auto byteSz = keyToWrite.size() + valueToWrite.size();
                 byteCt += byteSz;
@@ -1973,8 +2014,11 @@ void Storage::checkFulc1xUpgradeDB()
             // perform flush
             performFlush(name, info);
 
-            const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
-            Log() << "Imported " << totalCt << " rows, " << mb << " MB, in " << t0.secsStr() << " secs";
+            if (isRpaTable) shortBlockHashes.reset(); // clear this memory since it's no longer needed
+
+            const auto & [scaled, unit] = Util::ScaleBytes(byteCt);
+            const auto scaledStr = QString::number(scaled, 'f', unit != "bytes" ? 1 : 0);
+            Log() << "Imported " << totalCt << " rows, " << scaledStr << " " << unit << ", in " << t0.secsStr() << " secs";
             iterin.reset();
             if (auto st = dbin->Close(); !st.ok())
                 Warning() << "rocksdb::DB::Close returned error: " << st.ToString();
@@ -1994,20 +2038,78 @@ void Storage::checkFulc1xUpgradeDB()
             // Clear existing table from our DB
             deleteAllRowsInColumnFamily(name, info, false);
 
+            struct ShortHashTask {
+                std::mutex lock;
+                std::vector<Header> queue; // guarded by lock
+                std::vector<QByteArray> shortHashes; // guarded by lock
+                std::atomic_size_t totalBytes{0u};
+
+                std::vector<Header> headerBatch; // buffer used by master thread
+
+                CoTask task{"ShortHashTask", true};
+                std::optional<CoTask::Future> fut;
+
+                ShortHashTask() = default;
+
+                void pushBatch(const std::vector<Header> & hdrs) {
+                    headerBatch.insert(headerBatch.end(), hdrs.begin(), hdrs.end());
+                    workOnBatchInParallel();
+                }
+
+                void workOnBatchInParallel() {
+                    if (headerBatch.empty()) return;
+                    {
+                        std::unique_lock g(lock);
+                        if (queue.empty()) queue.swap(headerBatch);
+                        else {
+                            queue.insert(queue.end(), headerBatch.begin(), headerBatch.end());
+                            headerBatch.clear();
+                        }
+                    }
+                    // re-assigning to an existing `fut` may implicitly wait for previous work to complete
+                    fut.emplace(task.submitWork([this]{ processQueue(); }));
+                }
+
+                void waitForWorkToComplete() { if (fut) fut.reset(); }
+
+            private:
+                void processQueue() {
+                    for (;;) {
+                        std::vector<Header> q;
+                        { std::unique_lock g(lock); q.swap(queue); }
+                        if (q.empty()) return;
+                        std::vector<QByteArray> res;
+                        res.reserve(q.size());
+                        for (const auto & header : q)
+                            totalBytes += res.emplace_back(BTC::HashRev(header).right(kRpaShortBlockHashLen)).size();
+                        std::unique_lock g(lock);
+                        if (shortHashes.empty()) shortHashes.swap(res);
+                        else shortHashes.insert(shortHashes.end(), res.begin(), res.end());
+                    }
+                }
+            };
+
+            std::optional<ShortHashTask> headerTask;
+
+            if (info.handle == p->db.headers && numRecs)
+                headerTask.emplace(); // when importing headers, we also calculate the "short hashes" for later rpa import
+
             Tic t1;
             long lastPrt = 0;
             uint64_t totalCt{}, byteCt{};
             size_t writeBatchCt{};
             rocksdb::WriteBatch batch;
             auto doDBWrite = [&] {
+                if (headerTask) headerTask->workOnBatchInParallel();
                 if (auto st = db->Write(fastButLessSafeWrOpts, &batch); !st.ok())
                     throw DatabaseError("Error writing batch: " + StatusString(st));
                 Util::reconstructAt(&batch); // NB: We must do this because the WriteBatch object appears to leak and/or eat enormous memory if it keeps getting re-used
                 Debug() << "Processed " << writeBatchCt << " records in " << t1.msecStr() << " msec";
                 if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
                     lastPrt = now;
-                    const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
-                    Log() << "Progress: " << totalCt << " records, " << mb << " MB, in " << t0.secsStr() << " secs";
+                    const auto & [scaled, unit] = Util::ScaleBytes(byteCt);
+                    const auto scaledStr = QString::number(scaled, 'f', unit != "bytes" ? 1 : 0);
+                    Log() << "Progress: " << totalCt << " records, " << scaledStr << " " << unit << ", in " << t0.secsStr() << " secs";
                 }
                 writeBatchCt = 0;
                 t1 = Tic();
@@ -2018,6 +2120,9 @@ void Storage::checkFulc1xUpgradeDB()
                 lastBatchSize = records.size();
                 if (!lastBatchSize) [[unlikely]]
                     throw DatabaseError("Error reading RecordFile: " + err);
+
+                if (headerTask)
+                    headerTask->pushBatch(records);
 
                 auto ctx = dra->beginBatchWrite(batch);
                 if (!recNum) [[unlikely]] ctx.truncate(0); // first pass through, truncate DBRecordArray to 0.
@@ -2041,8 +2146,24 @@ void Storage::checkFulc1xUpgradeDB()
             // perform flush
             performFlush(name, info);
 
-            const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
-            Log() << "Imported " << totalCt << " records, " << mb << " MB, in " << t0.secsStr() << " secs";
+            // wait for header work, if any
+            if (headerTask) {
+                DebugM(name, ": grabbing short block hashes from CoTask ...");
+                headerTask->waitForWorkToComplete();
+                shortBlockHashes.emplace(std::move(headerTask->shortHashes)).shrink_to_fit();
+                const size_t memUsed = headerTask->totalBytes.load() + sizeof(*shortBlockHashes)
+                                       + shortBlockHashes->size() * Util::qByteArrayPvtDataSize(false)
+                                       + shortBlockHashes->capacity() * sizeof(decltype(shortBlockHashes)::value_type::value_type);
+                headerTask.reset();
+                const auto ct = shortBlockHashes->size();
+                const auto & [scaled, unit] = Util::ScaleBytes(memUsed);
+                DebugM(name, ": calculated ", ct, Util::Pluralize(" short block hash", ct), ", ",
+                       QString::number(scaled, 'f', unit != "bytes" ? 1 : 0), " ", unit, " (for upcoming potential rpa import)");
+            }
+
+            const auto & [scaled, unit] = Util::ScaleBytes(byteCt);
+            const auto scaledStr = QString::number(scaled, 'f', 1);
+            Log() << "Imported " << totalCt << " records, " << scaledStr << " " << unit << ", in " << t0.secsStr() << " secs";
 
             // Delete the RecordFile we just imported
             rf.reset();
@@ -2071,9 +2192,12 @@ void Storage::checkFulc1xUpgradeDB()
     // Finally, re-open in non-bulk mode
     openOrCreateDB(false);
 
+    const auto & [scaled, unit] = Util::ScaleBytes(totalByteCt);
+    const auto scaledStr = QString::number(scaled, 'f', 1);
+
     Log() << "Completed DB upgrade. Imported " << totalTableCt << " tables, " << totalRowCt << " rows (of which "
           << totalConvCt << " were converted), " << totalBatchCt << " write batches, "
-          << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
+          << scaledStr << " " << unit << " in "
           << totalElapsed.secsStr(1) << " seconds.";
 }
 
@@ -2496,11 +2620,17 @@ void Storage::deleteHeadersPastHeight(rocksdb::WriteBatch &batch, BlockHeight he
         throw InternalError("header truncate resulted in an unexepected value");
 }
 
-auto Storage::headerForHeight(BlockHeight height, QString *err) const -> std::optional<Header>
+auto Storage::headerForHeight(BlockHeight height, QString *err, HeaderHash *hashOut) const -> std::optional<Header>
 {
     std::optional<Header> ret;
-    if (int(height) <= latestTip().first && int(height) >= 0) {
+    Header tipheader;
+    const auto & [tipHeight, tipHash] = latestTip(&tipheader);
+    if (int(height) == tipHeight && int(height) >= 0) {
+        ret = tipheader;
+        if (hashOut) *hashOut = tipHash;
+    } else if (int(height) < tipHeight && int(height) >= 0) {
         ret = headerForHeight_nolock(height, err);
+        if (ret && hashOut) *hashOut = BTC::HashRev(*ret);
     } else if (err) { *err = QStringLiteral("Height %1 is out of range").arg(height); }
     return ret;
 }
@@ -2531,6 +2661,13 @@ auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num,
 
     ret.shrink_to_fit();
     return ret;
+}
+
+auto Storage::hashForHeight(BlockHeight height, QString *err) const -> std::optional<HeaderHash>
+{
+    if (HeaderHash hash; headerForHeight(height, err, &hash))
+        return hash;
+    return std::nullopt;
 }
 
 /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
@@ -2971,12 +3108,17 @@ void Storage::loadCheckRpaDB()
                   throw DatabaseFormatError(QString("Encountered a height (%1) in the RPA db that is > INT_MAX"
                                                     "; this indicates corruption or an incompatible DB format.").arg(height));
         };
-        auto TryDeserializePFTAndUpdateCounts = [&info = p->rpaInfo](uint32_t height, const rocksdb::Slice &slice) {
+        auto TryDeserializePFTAndUpdateCounts = [&info = p->rpaInfo](uint32_t height, rocksdb::Slice slice,
+                                                                     bool extractShortBHash = false) -> QByteArray {
             try {
                 bool ok{};
                 ++info.nReads;
                 info.nBytesRead += sizeof(height) + slice.size();
+                if (slice.size() < kRpaShortBlockHashLen) [[unlikely]] throw Exception("Slice should be prefixed with a short block hash");
+                const QByteArray shortHash = extractShortBHash ? DeepCpy(slice.data(), kRpaShortBlockHashLen) : QByteArray();
+                slice.remove_prefix(kRpaShortBlockHashLen);
                 Rpa::PrefixTable pt = Deserialize<Rpa::PrefixTable>(FromSlice(slice), &ok);
+                return shortHash;
             } catch (const std::exception &e) {
                 throw DatabaseSerializationError(QString("Error deserializing Rpa::PrefixTable for height %1: %2")
                                                  .arg(height).arg(e.what()));
@@ -3012,8 +3154,10 @@ void Storage::loadCheckRpaDB()
                     const RpaDBKey rk = Deserialize<RpaDBKey>(FromSlice(k), &ok);
                     if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
                     ThrowIfNegativeIfCastedToSigned(rk.height);
-                    if (firstHeight < 0) firstHeight = rk.height;
                     TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
+                    if (firstHeight < 0) {
+                        firstHeight = rk.height;
+                    }
                     if (lastHeight > -1 && BlockHeight(lastHeight) + 1u != rk.height) { // detect gaps
                         Warning() << QString("Gap in RBA db encountered starting at height %1 to height %2").arg(lastHeight + 1).arg(rk.height);
                         forceDeleteAfterHeight = BlockHeight(lastHeight);
@@ -3045,6 +3189,23 @@ void Storage::loadCheckRpaDB()
                 if (!deleteRpaEntriesFromHeight(nullptr, delheightplus1, true, true))
                     throw DatabaseError("Failed to delete the required keys from the DB. Please report this situation to the developers.");
             }
+        }
+        if (firstHeight > -1) {
+            auto GetShortHashForHeightFromRpa = [&TryDeserializePFTAndUpdateCounts, this](uint32_t height) -> std::optional<QByteArray> {
+                if (auto opt = GenericDBGet<QByteArray>(p->db, p->db.rpa, RpaDBKey(height), true))
+                    return TryDeserializePFTAndUpdateCounts(height, ToSlice(*opt), true);
+                return std::nullopt;
+            };
+            auto GetShortHashForHeightFromHeaders = [this](uint32_t height) -> std::optional<QByteArray> {
+                if (auto opt = hashForHeight(height)) return opt->right(kRpaShortBlockHashLen);
+                return std::nullopt;
+            };
+            const std::optional<QByteArray> firstShortHash = GetShortHashForHeightFromRpa(firstHeight.load()),
+                                            lastShortHash  = GetShortHashForHeightFromRpa(lastHeight.load()),
+                                            expectFirstShortHash = GetShortHashForHeightFromHeaders(firstHeight.load()),
+                                            expectLastShortHash  = GetShortHashForHeightFromHeaders(lastHeight.load());
+            if (expectFirstShortHash != firstShortHash || expectLastShortHash != lastShortHash) [[unlikely]]
+                throw DatabaseError("RPA db doesn't appear to cover the active chain");
         }
         // Print some info -- note firstHeight can mutate above which is why we do this here last
         if (firstHeight >= 0) Debug() << "RPA db data covers heights: " << firstHeight << " -> " << lastHeight;
@@ -3102,6 +3263,7 @@ bool Storage::deleteRpaEntriesFromHeight(rocksdb::WriteBatch *batch, const Block
         f.wait = true;
         f.allow_write_stall = true;
         p->db->Flush(f, p->db.rpa);
+        p->db->SyncWAL();
     }
     return true;
 }
@@ -3134,6 +3296,7 @@ bool Storage::deleteRpaEntriesToHeight(rocksdb::WriteBatch *batch, const BlockHe
         f.wait = true;
         f.allow_write_stall = true;
         p->db->Flush(f, p->db.rpa);
+        p->db->SyncWAL();
     }
     return true;
 }
@@ -3655,7 +3818,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             // Save RPA PrefixTable record (appends a single row to DB), if RPA is enabled for this block
             if (ppb->serializedRpaPrefixTable) {
-                addRpaDataForHeight_nolock(batch, ppb->height, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericBatchPut threw
+                addRpaDataForHeight_nolock(batch, ppb->height, ppb->hash, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericBatchPut threw
             }
 
             // save the last of the undo info, if in saveUndo mode
@@ -3750,12 +3913,16 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 }
 
 /// NB: Caller should probably hold some locks to avoid consistency issues... even though this function is inherently thread-safe.
-void Storage::addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, const BlockHeight height, const QByteArray &ser)
+void Storage::addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, const BlockHeight height, const BlockHash &bhash, const QByteArray &ser)
 {
     Tic t0;
 
     static const QString rpaErrMsg("Error writing block RPA data to db");
-    GenericBatchPut(batch, p->db.rpa, RpaDBKey(height), ser, rpaErrMsg);
+    QByteArray shortBHash;
+    if (bhash.size() != HashLen) [[unlikely]]
+        throw InternalError(QString("%1: bhash.size() != HashLen! This should never happen! FIXME!").arg(__func__));
+    shortBHash = bhash.right(kRpaShortBlockHashLen);
+    GenericBatchPut(batch, p->db.rpa, RpaDBKey(height), shortBHash + ser, rpaErrMsg);
     // Update RpaInfo stats: latest height, etc.
     if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
         // This should never happen. Warn if this invariant is violated to detect bugs.
@@ -3779,11 +3946,11 @@ void Storage::addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, const Block
         Debug() << "Saved RPA height: " << height << ", size: " << ser.size() << ", elapsed: " << t0.msecStr() << " msec";
 }
 
-void Storage::addRpaDataForHeight(BlockHeight height, const QByteArray &serializedRpaPrefixTable)
+void Storage::addRpaDataForHeight(BlockHeight height, const BlockHash &bhash, const QByteArray &serializedRpaPrefixTable)
 {
     ExclusiveLockGuard g(p->blocksLock);
     rocksdb::WriteBatch batch;
-    addRpaDataForHeight_nolock(batch, height, serializedRpaPrefixTable);
+    addRpaDataForHeight_nolock(batch, height, bhash, serializedRpaPrefixTable);
     auto s = p->db->Write(p->db.defWriteOpts, &batch);
     if (!s.ok()) Warning() << __func__ << ": failed in batch write for height " << height << ": " << StatusString(s);
 }
@@ -4352,14 +4519,17 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
                 else
                     iter->Next(); // bump iterator one item... this is the secret sauce to make this fast.
                 bool ok{};
-                if (UNLIKELY(!iter->Valid() || RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true) != dbKey || !ok)) {
+                rocksdb::Slice valueSlice; // NB: slice is invalidated when iter is modified
+                if (!iter->Valid() || RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true) != dbKey || !ok
+                        || (valueSlice = iter->value()).size() < kRpaShortBlockHashLen) [[unlikely]] {
                     // This should never happen -- error to console just in case we have bugs and/or missing data.
-                    Error() << "Missing RPA PrefixTable for height: " << height << ". This should never happen."
-                            << " Report this to situation to the developers.";
+                    Error() << "Missing or malformed RPA PrefixTable for height: " << height << "."
+                            << " This should never happen. Report this to situation to the developers.";
                     break;
                 }
+                // skip the first kRpaShortBlockHashLen bytes of `valueSlice` to get to the compressed serialized data
+                valueSlice.remove_prefix(kRpaShortBlockHashLen);
                 // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
-                const auto valueSlice = iter->value(); // NB: slice is invalidated when iter is modified
                 const auto prefixTable = Deserialize<Rpa::PrefixTable>(FromSlice(valueSlice)); // Throws on failure to deserialize.
                 tReadDb += t1.msec<double>();
                 // Update RpaInfo stats
