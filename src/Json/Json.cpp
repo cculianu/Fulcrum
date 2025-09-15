@@ -1,6 +1,6 @@
 /*
 Json - A lightweight JSON parser and serializer for Qt.
-Copyright (c) 2020-2024 Calin A. Culianu <calin.culianu@gmail.com>
+Copyright (c) 2020-2025 Calin A. Culianu <calin.culianu@gmail.com>
 
 The MIT License (MIT)
 
@@ -37,7 +37,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <limits>
 #include <mutex>
 #include <type_traits>
 
@@ -65,6 +64,18 @@ namespace {
 #else
         return QMetaType::Type(var.typeId());
 #endif
+    }
+
+    static QString cleanupAndClampByteStringForLog(QByteArray ba, QByteArray::size_type limit = 80)
+    {
+        const auto origSize = ba.size();
+        ba = ba.left(std::min(limit, origSize));
+        for (char & ch : ba)
+            if (static_cast<uint8_t>(ch) & 0x80u || ch < ' ' || ch == '\x7f')
+                ch = '?'; // replace all junk such as \b or \n etc with '?'
+        QString ret = QString::fromLatin1(ba);
+        if (origSize > limit) ret.append("...");
+        return ret;
     }
 
     // Opaque type used for writing. This can be further optimized later.
@@ -222,7 +233,8 @@ namespace {
 #else
             const QString tname(QMetaType::typeName(typ));
 #endif
-            throw Json::Error(QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(tname, v.toString()));
+            throw Json::Error(QString("Unsupported type %1 (%2) for '%3'").arg(int(typ))
+                                  .arg(tname, cleanupAndClampByteStringForLog(v.toString().toLatin1())));
         }
         } // end switch
     }
@@ -348,8 +360,7 @@ namespace Json {
             std::call_once(once_checkLocale, checkLocale, false);
         QVariant ret;
         if (!detail::parse(ret, ba, backend))
-            throw ParseError(QString("Failed to parse Json from string: %1%2").arg(QString(ba.left(80)))
-                             .arg(ba.size() > 80 ? "..." : ""));
+            throw ParseError(QString("Failed to parse Json from string: %1").arg(cleanupAndClampByteStringForLog(ba)));
         if (opt == ParseOption::RequireObject && GetVarType(ret) != QMetaType::QVariantMap)
             throw Error("Json Error: expected object");
         if (opt == ParseOption::RequireArray && GetVarType(ret) != QMetaType::QVariantList)
@@ -454,7 +465,8 @@ namespace Json {
 #else
             const QString tname(QMetaType::typeName(typ));
 #endif
-            qWarning() << QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(tname, v.toString());
+            qWarning() << QString("Unsupported type %1 (%2) for '%3'").arg(int(typ))
+                              .arg(tname, cleanupAndClampByteStringForLog(v.toString().toLatin1()));
             return ret;
         }
         } // end switch
