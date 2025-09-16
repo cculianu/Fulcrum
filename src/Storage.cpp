@@ -1754,12 +1754,20 @@ void Storage::checkFulc1xUpgradeDB()
 
     constexpr int timeoutSecs = 10;
     auto PrintCountdownMessage = [&] {
-        Log() << "\n\n************************\n"
-                 "*** Database Upgrade ***\n"
-                 "************************\n"
-                 "This will take some time and is irreversible and uninterruptible. If unsure, hit CTRL-C"
-                 "\nnow and either take a backup of the database directory or do a full resynch to bitcoind."
-                 "\nOtherwise, wait for the timeout to occur and the upgrade process will commence.\n";
+        Log() << R"(
+
+********************************************************************************
+*                               Database Upgrade                               *
+********************************************************************************
+* This will take up to an hour and is irreversible and uninterruptible. If the *
+* process is killed while the DB is being upgraded, then the DB will be in a   *
+* corrupted state and must be resynched. Therefore, once the upgrade starts be *
+* sure to let it run to completion.                                            *
+*                                                                              *
+* If unsure, hit CTRL-C now and take a backup of the database directory.       *
+* Otherwise, wait for the timeout to occur and the upgrade will commence.      *
+********************************************************************************
+)";
         for (int i = 0; i < timeoutSecs && !app()->signalsCaught(); ++i) {
             const auto secs = (timeoutSecs - i);
             Log() << "Upgrade will begin in " << secs << Util::Pluralize(" second", secs) << ", hit CTRL-C now to abort ...";
