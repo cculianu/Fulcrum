@@ -521,8 +521,8 @@ private:
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
     void checkUpgradeDBVersion(); ///< may throw -- called from startup()
 
-    // Called from startup() to warn the user there was an unclean shutdown of the previous run and attempt to undo the latest block
-    void uncleanShutdownDetectedUndoLatestBlock();
+    // Called from startup() to warn the user there was an unclean shutdown detected and attempt to undo the last 6 blocks
+    void uncleanShutdownDetectedUndoSomeBlocks();
 
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;

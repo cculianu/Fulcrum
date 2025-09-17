@@ -1474,20 +1474,24 @@ void Storage::startup()
 
     // Detect an unclean shutdown on previous run and attempt to undo the latest block
     if (!didFulc1xUpgrade && options->flags.potentiallyUncleanShutdownDetected)
-        uncleanShutdownDetectedUndoLatestBlock();
+        uncleanShutdownDetectedUndoSomeBlocks();
 
     emit dbSuccessfullyOpened(); // indicate to App instance we did open the DB ok.
 
     start(); // starts our thread
 }
 
-void Storage::uncleanShutdownDetectedUndoLatestBlock()
+void Storage::uncleanShutdownDetectedUndoSomeBlocks()
 {
+    constexpr size_t kNumBlocksToUndo = 6u;
+    if (!kNumBlocksToUndo) return; // we can set the above constant to 0 to disable the undo mechanism altogether
     bool undoMissing = p->earliestUndoHeight == p->InvalidUndoHeight;
     if (!undoMissing) {
-        Alert() << "Previous run of " << APPNAME << " may have shut down uncleanly, undoing latest block ...";
+        Alert() << "Previous run of " << APPNAME << " may have shut down uncleanly, undoing last " << kNumBlocksToUndo
+                << Util::Pluralize(" block", kNumBlocksToUndo) << " ...";
         try {
-            undoLatestBlock(false);
+            for (size_t i = 0; i < kNumBlocksToUndo; ++i)
+                undoLatestBlock(false); // this will throw if unfo info is missing for the tip
         } catch (const UndoInfoMissing &e) {
             Warning() << "Error retrieving undo info for latest block: " << e.what();
             undoMissing = true;
@@ -1495,10 +1499,10 @@ void Storage::uncleanShutdownDetectedUndoLatestBlock()
     }
     if (undoMissing)
         Alert() << "The previous run of " << APPNAME << " may have shut down uncleanly, however undo info is"
-                << " missing from the DB. It would normally be safest to undo the latest block, but since"
-                << " we cannot do that, we will proceed anyway and presume the DB is consistent. In the future,"
-                << " please use TERM, INT, or QUIT signals to request a clean process exit, and wait for "
-                << APPNAME << " to exit cleanly.";
+                << " missing from the DB. It would normally be safest to undo the last " << kNumBlocksToUndo
+                << Util::Pluralize(" block", kNumBlocksToUndo) << ", but since we cannot do that, we will proceed"
+                << " anyway and presume the DB is consistent. In the future, please use SIGTERM, SIGINT, or SIGQUIT"
+                << " to request a clean process exit, and wait for " << APPNAME << " to exit cleanly.";
 }
 
 void Storage::openOrCreateDB(bool bulkLoad)
