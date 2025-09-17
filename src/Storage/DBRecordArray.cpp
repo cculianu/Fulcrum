@@ -80,7 +80,7 @@ DBRecordArray::Error::~Error() {} // for vtable
 
 DBRecordArray::DBRecordArray(rocksdb::DB &db_, rocksdb::ColumnFamilyHandle &cf_, uint32_t recSz_,
                              const uint32_t bucketNRecsPOT, uint32_t magic_) noexcept(false)
-    : db{db_}, cf{cf_}, recSz{recSz_}, bucketNRecs{std:: bit_floor(bucketNRecsPOT)}, magic{magic_},
+    : db{db_}, cf{cf_}, recSz{recSz_}, magic{magic_}, bucketNRecs{std:: bit_floor(bucketNRecsPOT)},
       bucketShiftAmt{static_cast<uint8_t>(std::popcount(bucketNRecs - 1u))}
 {
     // bucketNRecsPOT must be a power of 2
@@ -137,10 +137,18 @@ void DBRecordArray::readOrInitMeta()
         if (meta.recSz != recSz)
             throw Error(QString("%1: Record size mismatch for DB %2, expected: %3, got: %4").arg(__func__, dbName)
                             .arg(recSz).arg(meta.recSz));
-        // TODO: Determine if we should we tolerate bucket size mismatch here.
-        if (meta.bucketNRecs != bucketNRecs)
-            throw Error(QString("%1: bucketNRecs mismatch for DB %2, expected: %3, got: %4").arg(__func__, dbName)
-                            .arg(bucketNRecs).arg(meta.bucketNRecs));
+        if (meta.bucketNRecs != bucketNRecs) {
+            if (!std::has_single_bit(meta.bucketNRecs))
+                throw Error(QString("%1: bucketNRecs mismatch for DB %2, expected: %3, got: %4; DB value is not a power of 2!")
+                                .arg(__func__, dbName).arg(bucketNRecs).arg(meta.bucketNRecs));
+            if (static_cast<uint64_t>(recSz) * static_cast<uint64_t>(meta.bucketNRecs) > 1ull << 31u)
+                throw Error(QString("%1: excessive bucket size read from metadata in DB (recSz * bucketNRecs = %2)")
+                                .arg(__func__).arg(recSz * meta.bucketNRecs));
+            Warning() << __func__ << ": bucketNRecs mismatch for DB " << dbName << ", expected: " << bucketNRecs
+                      <<  " got: " << meta.bucketNRecs << ", will proceed with DB value instead";
+            bucketNRecs = meta.bucketNRecs;
+            bucketShiftAmt = static_cast<uint8_t>(std::popcount(bucketNRecs - 1u));
+        }
 
         // See if nRecs is sane
         iter->SeekToLast();

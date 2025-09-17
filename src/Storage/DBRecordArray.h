@@ -45,9 +45,9 @@ class DBRecordArray
     const rocksdb::WriteOptions wopts;
 
     const size_t recSz;
-    const size_t bucketNRecs;
     const uint32_t magic;
-    const uint8_t bucketShiftAmt;
+    size_t bucketNRecs;
+    uint8_t bucketShiftAmt;
     std::atomic_uint64_t nRecs{0u};
 
     struct MetaData;
@@ -86,11 +86,12 @@ public:
     DBRecordArray(const DBRecordArray &) = delete;
     DBRecordArray & operator=(const DBRecordArray &) = delete;
 
+    QString name() const;
+
     size_t recordSize() const { return recSz; }
     uint32_t magicBytes() const { return magic; }
-    QString name() const;
-    uint64_t numRecords() const { return nRecs.load(); }
-    size_t bucketNumRecords() const { return bucketNRecs; }
+    size_t bucketNumRecords() const { return bucketNRecs; } // number of records per bucket
+    uint64_t numRecords() const { return nRecs.load(); } // total number of records in the entire column family
 
     /// Thread-safe.  The first record is recNum = 0, the second is recNum = 1. Returns a QByteArray of size recsz or
     /// an empty QByteArray on error.

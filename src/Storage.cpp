@@ -1717,7 +1717,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
         || !p->db.utxoset || !p->db.undo || !p->db.txnum2txhash || !p->db.headers) [[unlikely]]
         throw InternalError("A required column family handle is still nullptr! FIXME!");
 
-    // Open the two DBRecordArrays now. Note: Changing the recordSize, bucketNItems, and magic params *WILL* produce a
+    // Open the two DBRecordArrays now. Note: Changing the recordSize and/or magic params *WILL* produce a
     // database incompatibility!
     p->db.txNumsDRA =  std::make_unique<DBRecordArray>(*p->db, *p->db.txnum2txhash,
                                                        /* recSize = */ HashLen,
@@ -2852,9 +2852,10 @@ void Storage::loadCheckTxNumsDRAAndBlkInfo()
 // this depends on the above function having been run already
 void Storage::loadCheckTxHash2TxNumMgr()
 {
-    // the below may throw
+    // the below may throw; nb: do not change keyBytes or keyPos lightly as it will create a database incompatibility to do so.
     p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.get(), p->db.txhash2txnum, p->db.defReadOpts, p->db.defWriteOpts,
-                                                              p->db.txNumsDRA.get(), 6, TxHash2TxNumMgr::KeyPos::End);
+                                                              p->db.txNumsDRA.get(),
+                                                              /*keyBytes=*/ 6, /*keyPos=*/ TxHash2TxNumMgr::KeyPos::End);
     try {
         // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
         // and that those hashes exist in the txhash2txnum db
