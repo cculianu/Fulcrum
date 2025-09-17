@@ -1554,23 +1554,23 @@ void Storage::openOrCreateDB(bool bulkLoad)
     if constexpr (TWO_LEVEL_INDEX)
         SetupTwoLevelIndex(tableOptions);
 
-    // shared TableFactory for all column families
+    // Shared TableFactory for all column families
     opts.table_factory.reset(rocksdb::NewBlockBasedTableFactory(tableOptions));
 
-    // setup shared write buffer manager (for memtables memory budgeting)
-    // - TODO right now we fix the cap of the write buffer manager's buffer size at db.maxMem / 2; tweak this.
-    auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(options->db.maxMem / 2/* Disabled to reduce lock contention: , tableOptions.block_cache*/ /* cost to block cache: hopefully this caps memory better? it appears to use locks though so many this will be slow?! TODO: experiment with and without this!! */);
+    // Setup shared write buffer manager (for memtables memory budgeting)
+    // - Note: we fix the cap of the write buffer manager's buffer size at db.maxMem / 2; Might need to tweak this, but works well so far.
+    auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(options->db.maxMem / 2, tableOptions.block_cache /* Cost to block cache: this caps memory better. It uses locks so it comes at expense of more lock contention. */);
     p->db.writeBufferManager = writeBufferManager; // save shared_ptr to weak_ptr
     opts.write_buffer_manager = writeBufferManager; // will be shared across all column families
 
-    // create the DB if it's not already present
+    // Create the DB if it's not already present
     opts.create_if_missing = true;
     opts.error_if_exists = false;
-    opts.compression = rocksdb::CompressionType::kNoCompression; // for now we go without compression. TODO: characterize what is fastest and best..
+    opts.compression = rocksdb::CompressionType::kNoCompression; // We find that the space savings of compression are not worth the tradeoff in terms of CPU load.
     if (!bulkLoad) {
-        opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
+        opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< This affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
         opts.keep_log_file_num = options->db.keepLogFileNum;
-        opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
+        opts.use_fsync = options->db.useFsync; // The false default is perfectly safe, but Jt asked for this as an option, so here it is.
     }
 
     auto OptimizeForPointLookup = [this](rocksdb::ColumnFamilyOptions &cfopts) {

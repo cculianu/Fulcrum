@@ -599,8 +599,9 @@ void App::parseArgs()
         "db_mem",
          QString("Specify roughly the maximum amount of memory to give to rocksb. Larger values offer better performance,"
                  " at the expense of memory consumption. Specify a floating-point or integer value in MiB (1 MiB = 1048576 bytes)."
-                 " Default is: %1.\n").arg(options->db.defaultMaxMem / 1024.0 / 1024.0, 0, 'f', 1),
-         QString("MB")
+                 " Default is autodetection, which is either %1 or 25% of the total physical RAM in the system, whichever is smaller.\n")
+             .arg(options->db.autoDefaultMaxMem / 1024.0 / 1024.0, 0, 'f', 1),
+         QString("MiB")
     },
     {
         "db-upgrade", "Enable " APPNAME " 1.x -> 2.x DB upgrade. Use this option the first time you install " APPNAME
@@ -1302,8 +1303,8 @@ void App::parseArgs()
     }
     if (const bool pset = parser.isSet("db_mem"); pset || conf.hasValue("db_mem")) {
         bool ok;
-        const double mb = pset ? parser.value("db_mem").toDouble(&ok) : conf.doubleValue("db_mem", options->db.defaultMaxMem, &ok);
-        if (const size_t bytes = mb*size_t(1024*1024); !ok || mb < 0. || !options->db.isMaxMemInBounds(bytes))
+        const double mb = pset ? parser.value("db_mem").toDouble(&ok) : conf.doubleValue("db_mem", options->db.autoDefaultMaxMem, &ok);
+        if (const size_t bytes = mb*size_t(1024ull*1024ull); !ok || mb < 0. || !options->db.isMaxMemInBounds(bytes))
             throw BadArgs(QString("db_mem: bad value. Specify a value in the range [%1, %2]")
                           .arg(options->db.maxMemMin / 1024. / 1024., 0, 'f', 1).arg(options->db.maxMemMax / 1024. / 1024., 0, 'f', 1));
         else {
@@ -1312,12 +1313,12 @@ void App::parseArgs()
             Util::AsyncOnObject(this, [mb]{ Debug() << "config: db_mem = " << mb; });
         }
     } else {
-        // User didn't specify db_mem, attempt to use default (1GiB), or 25% of total physical RAM, whichever is
+        // User didn't specify db_mem, attempt to use default (2GiB), or 25% of total physical RAM, whichever is
         // smaller. Also apply a lower bound of 512MiB (which was the older Fulcrum default db_mem).
-        static_assert(Options::DBOpts::isMaxMemInBounds(Options::DBOpts::defaultMaxMem)
+        static_assert(Options::DBOpts::isMaxMemInBounds(Options::DBOpts::autoDefaultMaxMem)
                       && Options::DBOpts::isMaxMemInBounds(Options::DBOpts::oldDefaultMaxMem));
         const size_t memBytes = Util::getTotalPhysicalRAM() / 4u;
-        options->db.maxMem = std::max(std::min(options->db.defaultMaxMem, memBytes), options->db.oldDefaultMaxMem);
+        options->db.maxMem = std::max(std::min(options->db.autoDefaultMaxMem, memBytes), options->db.oldDefaultMaxMem);
     }
     if (conf.hasValue("db_use_fsync")) {
         bool ok;

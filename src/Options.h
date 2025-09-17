@@ -204,11 +204,12 @@ public:
         unsigned keepLogFileNum = defaultKeepLogFileNum;
         static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
 
-        static constexpr size_t defaultMaxMem = 1024 * 1024 * 1024,  // 1GiB
-                                oldDefaultMaxMem = 512 * 1024 * 1024, // 512MiB; older Fulcrum default
-                                maxMemMin = 50 * 1024 * 1024, // 50MiB
+        // db_mem defaults to autodetect mode, where we try to use max(oldDefaultMaxMem, min(autoDefaultMaxMem, 25% of totalPhysicalRam))
+        static constexpr size_t autoDefaultMaxMem = 2ull * 1024ull * 1024ull * 1024ull,  // 2GiB
+                                oldDefaultMaxMem = 512ull * 1024ull * 1024ull, // 512MiB; older Fulcrum default
+                                maxMemMin = 50ull * 1024ull * 1024ull, // 50MiB
                                 maxMemMax = std::numeric_limits<size_t>::max();
-        size_t maxMem = defaultMaxMem;
+        size_t maxMem = autoDefaultMaxMem;
         static constexpr bool isMaxMemInBounds(size_t mem) { return mem >= maxMemMin && mem <= maxMemMax; }
 
         /// db_use_fsync in conf file -- default false
