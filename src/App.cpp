@@ -54,7 +54,6 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
-#include <limits>
 #include <list>
 #include <locale>
 #include <mutex>
@@ -88,7 +87,7 @@ App::App(int argc, char *argv[])
         options->syslogMode = true; // suppress timestamp stuff
         Error() << e.what();
         Log() << "Use the -h option to show help.";
-        std::exit(1);
+        std::exit(EXIT_FAILURE);
     }
     if (options->syslogMode) {
         _logger = std::make_unique<SysLogger>(this);
@@ -106,11 +105,11 @@ App::App(int argc, char *argv[])
 
 App::~App()
 {
+    Debug() << "App d'tor";
     if (options && !options->pidFileAbsPath.isEmpty()) {
         if (!QFile::remove(options->pidFileAbsPath)) Warning() << "Failed to delete pid file: " << options->pidFileAbsPath;
         else DebugM("Deleted pid file: ", options->pidFileAbsPath);
     }
-    Debug() << "App d'tor";
     Log() << "Shutdown complete";
     s_globalInstance = nullptr;
     /// child objects will be auto-deleted, however most are already gone in cleanup() at this point.
@@ -275,14 +274,17 @@ void App::startup()
 
         startup_Sighandlers(); // register our signal handlers (SIGINT, SIGTERM, etc)
 
+        latchFile.emplace(*options); // may throw; create the latch file we use to track abrupt shutdown conditions
+
         controller = std::make_unique<Controller>(options, sslCertMonitor.get());
+        connect(controller.get(), &Controller::dbSuccessfullyOpened, this, &App::on_DbSuccessfullyOpened, Qt::DirectConnection);
         controller->startup(); // may throw
 
         if (!options->statsInterfaces.isEmpty()) {
             const auto num = options->statsInterfaces.count();
             Log() << "Stats HTTP: starting " << num << " " << Util::Pluralize("server", num) << " ...";
             // start 'stats' http servers, if any
-            for (const auto & i : options->statsInterfaces)
+            for (const auto & i : std::as_const(options->statsInterfaces))
                 start_httpServer(i); // may throw
         }
 
@@ -302,6 +304,7 @@ void App::cleanup()
         httpServers.clear(); // deletes shared pointers
     }
     if (controller) { Log("Stopping Controller ... "); controller->cleanup(); controller.reset(); }
+    latchFile.reset(); // delete the latch file (explicitly destructed here to capture any log messages)
     cleanup_Sighandlers();
 }
 
@@ -327,6 +330,52 @@ void App::cleanup_WaitForThreadPoolWorkers()
         Debug("Successfully waited for %d thread pool %s (elapsed: %0.3f secs)", nJobs,
               Util::Pluralize("worker", nJobs).toUtf8().constData(), t0.elapsed()/1e3);
     }
+}
+
+void App::on_DbSuccessfullyOpened()
+{
+    if (!latchFile) return;
+    const bool wasSet = latchFile->suppressFileDeletion.exchange(false);
+    DebugM("on_DbSuccessfullyOpened called", wasSet ? ", cleared suppressFileDeletion flag" : " (no work to do)");
+}
+
+App::LatchFile::LatchFile(Options &options)
+{
+    if (!QFile::exists(options.datadir)) [[unlikely]] // paranoia
+        throw InternalError(QString("INTERNAL ERROR: Datadir \"%1\" is expected to exist! FIXME!").arg(options.datadir));
+    const QString path = options.datadir + QDir::separator() + "latch";
+    bool & didExist = options.flags.potentiallyUncleanShutdownDetected;
+    suppressFileDeletion = didExist = QFileInfo::exists(path);
+    if (didExist) DebugM("Existing latch file detected: ", path);
+    const bool doesNotExistAnymore = !didExist || QFile::remove(path) || QDir(path).removeRecursively();
+    file = std::make_unique<QFile>(path);
+    if (!doesNotExistAnymore || QFileInfo::exists(path) || file->exists()) // excessively paranoid triple-check here..
+        throw Exception(QString("Unable to delete the file \"%1\". Please check file permissions and try again.").arg(path));
+    if (!file->open(QIODevice::OpenModeFlag::NewOnly|QIODevice::OpenModeFlag::Text) || !file->exists())
+        throw Exception(QString("Unable to create the file \"%1\". Please check permissions for the enclosing directory.").arg(path));
+    if (auto buf = QByteArray::number(static_cast<qlonglong>(applicationPid())).append("\n"); file->write(buf) != buf.size())
+        Warning() << "Error writing PID to file: " << path; // this is not critical but is.. unexpected!
+    file->flush();
+    DebugM(didExist ? "Deleted & re-created" : "Created", " latch file", didExist ? " (unclean shutdown condition detected)" : "");
+}
+
+
+// Called during App::cleanup(). Removes latch file.
+App::LatchFile::~LatchFile()
+{
+    if (!file) return;
+    const auto fn = file->fileName();
+    if (suppressFileDeletion.load()) {
+        // we don't delete the file to make the "unclean shutdown" condition be sticky until first successful DB open occurs
+        DebugM("~LatchFile: suppressed deletion of \"", fn, "\"");
+        return;
+    }
+    if (!file->exists())
+        Error() << "Expected file \"" << fn << "\" to exist, but it is already gone. Is some other program manipulating the datadir?";
+    else if (!file->remove())
+        Warning() << "Failed to remove file: " << fn;
+    else
+        DebugM("Deleted latch file");
 }
 
 
@@ -1446,7 +1495,7 @@ void App::parseArgs()
             throw BadArgs(QString("pidfile: Cannot open file \"%1\"").arg(pidFile.fileName()));
         QFileInfo fi(pidFile.fileName());
         options->pidFileAbsPath = fi.absoluteFilePath(); // save pid file path so we can delete it later
-        if (pidFile.write(QByteArray::number(applicationPid()) + '\n') <= 0)
+        if (pidFile.write(QByteArray::number(applicationPid()).append('\n')) <= 0)
             throw BadArgs(QString("pidfile: Cannot write to file \"%1\"").arg(pidFile.fileName()));
         Util::AsyncOnObject(this, [this] {
             DebugM("config: pidfile = ", options->pidFileAbsPath, " (size: ", QFileInfo(options->pidFileAbsPath).size(), " bytes)");

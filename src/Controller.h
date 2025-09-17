@@ -96,6 +96,9 @@ public:
     using RpaOnlyModeDataPtr = std::shared_ptr<RpaOnlyModeData>;
 
 signals:
+    /// Emitted in Storage::startup(), after successful DB open
+    void dbSuccessfullyOpened();
+
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything (except mempool) is synched up.
     /// note this is not emitted during regular polling, but only after `synchronizing` was emitted previously.
     void upToDate();

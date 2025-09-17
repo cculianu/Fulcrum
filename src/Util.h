@@ -218,6 +218,28 @@ public:
 #endif
 };
 
+/** \brief Stream-like class to print an alert message to the app's logging facility.
+    \details Alerts are slightly more important than warnings, but not quite as severe as errors. They are colored
+             in bright magenta if on a tty.
+
+ Example:
+\code
+     Alert() << "This is an alert message..."; // would print an alrt message to the logging facility
+\endcode
+*/
+class Alert : public Log
+{
+public:
+    using Log::Log; // inherit c'tor
+    virtual ~Alert();
+
+#if defined(__GNUC__) && !defined(__clang__)
+    // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
+    template <typename ...Args>
+    explicit Alert(Args && ...args) : Log(std::forward<Args>(args)...) {}
+#endif
+};
+
 /// Like Error(), except it will enqueue a qApp->exit(1) after logging the message
 class Fatal : public Log
 {

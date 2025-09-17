@@ -862,6 +862,12 @@ Warning::~Warning()
     if (!colorOverridden) color = Yellow;
 }
 
+Alert::~Alert()
+{
+    level = Logger::Level::Alert;
+    if (!colorOverridden) color = BrightMagenta;
+}
+
 Fatal::~Fatal()
 {
     level = Logger::Level::Fatal;

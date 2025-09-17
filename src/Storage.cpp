@@ -1422,7 +1422,7 @@ void Storage::startup()
     openOrCreateDB();
 
     // check and/or do Fulcrum 1.x -> 2.x DB upgrade (this is different than the internal "checkUpgradeDBVersion" done later
-    checkFulc1xUpgradeDB();
+    const bool didFulc1xUpgrade = checkFulc1xUpgradeDB();
 
     // latch this flag to true to prohibit future calls to openOrCreateDB()
     p->openOrCreateDBCanNoLongerBeCalled = true;
@@ -1472,7 +1472,33 @@ void Storage::startup()
     // Detect old DB version and see if upgrade is permitted, and maybe do a DB upgrade...
     checkUpgradeDBVersion();
 
+    // Detect an unclean shutdown on previous run and attempt to undo the latest block
+    if (!didFulc1xUpgrade && options->flags.potentiallyUncleanShutdownDetected)
+        uncleanShutdownDetectedUndoLatestBlock();
+
+    emit dbSuccessfullyOpened(); // indicate to App instance we did open the DB ok.
+
     start(); // starts our thread
+}
+
+void Storage::uncleanShutdownDetectedUndoLatestBlock()
+{
+    bool undoMissing = p->earliestUndoHeight == p->InvalidUndoHeight;
+    if (!undoMissing) {
+        Alert() << "Previous run of " << APPNAME << " may have shut down uncleanly, undoing latest block ...";
+        try {
+            undoLatestBlock(false);
+        } catch (const UndoInfoMissing &e) {
+            Warning() << "Error retrieving undo info for latest block: " << e.what();
+            undoMissing = true;
+        }
+    }
+    if (undoMissing)
+        Alert() << "The previous run of " << APPNAME << " may have shut down uncleanly, however undo info is"
+                << " missing from the DB. It would normally be safest to undo the latest block, but since"
+                << " we cannot do that, we will proceed anyway and presume the DB is consistent. In the future,"
+                << " please use TERM, INT, or QUIT signals to request a clean process exit, and wait for "
+                << APPNAME << " to exit cleanly.";
 }
 
 void Storage::openOrCreateDB(bool bulkLoad)
@@ -1705,7 +1731,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
         Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
 }
 
-void Storage::checkFulc1xUpgradeDB()
+bool Storage::checkFulc1xUpgradeDB()
 {
     // ---- Fulcrum 1.x DB upgrade test code ----
 
@@ -1738,9 +1764,9 @@ void Storage::checkFulc1xUpgradeDB()
 
     if (!hasAllFulcrum1DBElements) {
         if (options->db.doUpgrade)
-            Warning() << "CLI argument --db-upgrade requested but no " << APPNAME << " 1.x database found in "
+            Warning() << "CLI argument --db-upgrade requested but no complete " << APPNAME << " 1.x database found in "
                       << options->datadir;
-        return;
+        return false;
     } // else ...
     // hasAllFulcrum1DBElements == true below..
     if (!options->db.doUpgrade)
@@ -1764,7 +1790,7 @@ void Storage::checkFulc1xUpgradeDB()
 * corrupted state and must be resynched. Therefore, once the upgrade starts be *
 * sure to let it run to completion.                                            *
 *                                                                              *
-* If unsure, hit CTRL-C now and take a backup of the database directory.       *
+* If unsure, hit CTRL-C now and take a backup of the data directory.           *
 * Otherwise, wait for the timeout to occur and the upgrade will commence.      *
 ********************************************************************************
 )";
@@ -2207,6 +2233,7 @@ void Storage::checkFulc1xUpgradeDB()
           << totalConvCt << " were converted), " << totalBatchCt << " write batches, "
           << scaledStr << " " << unit << " in "
           << totalElapsed.secsStr(1) << " seconds.";
+    return true;
 }
 
 void Storage::checkUpgradeDBVersion()
@@ -3926,11 +3953,12 @@ void Storage::addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, const Block
     Tic t0;
 
     static const QString rpaErrMsg("Error writing block RPA data to db");
-    QByteArray shortBHash;
+    QByteArray dbVal;
     if (bhash.size() != HashLen) [[unlikely]]
         throw InternalError(QString("%1: bhash.size() != HashLen! This should never happen! FIXME!").arg(__func__));
-    shortBHash = bhash.right(kRpaShortBlockHashLen);
-    GenericBatchPut(batch, p->db.rpa, RpaDBKey(height), shortBHash + ser, rpaErrMsg);
+    dbVal.reserve(kRpaShortBlockHashLen + ser.size());
+    dbVal.append(bhash.right(kRpaShortBlockHashLen)).append(ser); // concatenate the 4 rightmost bytes of `bhash` + `ser`
+    GenericBatchPut(batch, p->db.rpa, RpaDBKey(height), dbVal, rpaErrMsg);
     // Update RpaInfo stats: latest height, etc.
     if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
         // This should never happen. Warn if this invariant is violated to detect bugs.

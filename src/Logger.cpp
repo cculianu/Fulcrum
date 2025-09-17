@@ -112,6 +112,7 @@ void SysLogger::gotLine(int level, const QString &l)
     }
     int ulevel = LOG_NOTICE;
     switch (level) {
+    case Alert:
     case Warning: ulevel = LOG_WARNING; break;
     case Fatal:
     case Critical: ulevel = LOG_CRIT; break;

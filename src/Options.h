@@ -41,6 +41,13 @@ struct Options {
 private:
     static void test();
 public:
+
+    /// None of these come from options, but are rather app-wide flags that the App class may set
+    struct Flags {
+        /// If true, we detected a stale file, `datadir/latch`, indicating a previous run had an unexcpected process exit
+        bool potentiallyUncleanShutdownDetected = false;
+    } flags;
+
     /// Return this object as a QVariantMap suitable for serializing as JSON. Controller::stats() uses this to
     /// output the configured options to the /stats output JSON, for example.
     QVariantMap toMap() const;

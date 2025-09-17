@@ -83,6 +83,7 @@ class TransactionSubsMgr;
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
 {
+    Q_OBJECT
 public:
     Storage(const std::shared_ptr<const Options> & options);
     ~Storage() override;
@@ -419,6 +420,10 @@ public:
     /// unless the RPA index is definitely enabled in the app (Controller respects this criterion).
     bool runRpaSlowCheckIfDBIsPotentiallyInconsistent(BlockHeight configuredStartHeight, BlockHeight tipHeight);
 
+signals:
+    /// Emitted as one of the last things in startup(), after the DB has been fully opened and is ready to go.
+    void dbSuccessfullyOpened();
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -506,7 +511,7 @@ private:
 
     bool isDirty_impl(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf) const;
 
-    void checkFulc1xUpgradeDB(); ///< may throw -- must be called from startup() before the below...
+    bool checkFulc1xUpgradeDB(); ///< may throw -- must be called from startup() before the below... returns true if it did do the upgrade
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()
@@ -514,7 +519,10 @@ private:
     void loadCheckTxNumsDRAAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
-    void checkUpgradeDBVersion(); ///< may throw -- called from startup() as the last thing
+    void checkUpgradeDBVersion(); ///< may throw -- called from startup()
+
+    // Called from startup() to warn the user there was an unclean shutdown of the previous run and attempt to undo the latest block
+    void uncleanShutdownDetectedUndoLatestBlock();
 
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;

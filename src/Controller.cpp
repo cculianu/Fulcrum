@@ -66,6 +66,9 @@ void Controller::startup()
     stopFlag = false;
 
     storage = std::make_shared<Storage>(options);
+
+    conns += connect(storage.get(), &Storage::dbSuccessfullyOpened, this, &Controller::dbSuccessfullyOpened, Qt::DirectConnection);
+
     storage->startup(); // may throw here
 
     // check that the coin from DB is known and supported

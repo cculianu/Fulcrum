@@ -31,6 +31,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <shared_mutex>
 #include <type_traits>
 
@@ -39,6 +40,8 @@ class Logger;
 class SimpleHttpServer;
 class SSLCertMonitor;
 class ThreadPool;
+
+class QFile;
 
 extern "C" void signal_trampoline(int sig); ///< signal handler must be extern "C" according to the C++ standard.
 
@@ -136,6 +139,10 @@ public slots:
     /// from any thread and/or to use a Qt::DirectConnection here.
     void on_bitcoindThrottleParamsChange(int hi, int lo, int decay);
 
+    /// Connected to a signal from Storage and called to indicate that Storage successfully opened the DB without
+    /// incident. Sets LatchFile::suppressFileDeletion to false.
+    void on_DbSuccessfullyOpened();
+
 private slots:
     void on_setVerboseDebug(bool);
     void on_setVerboseTrace(bool);
@@ -187,6 +194,22 @@ private:
     friend void ::signal_trampoline(int sig); // The extern "C" function declared at the top of this file.
     void startup_Sighandlers();
     void cleanup_Sighandlers();
+
+    // RAII type to manage the datadir latch file, which is used by this app as a way to detect unclean shutdown
+    // conditions of previous program runs.
+    struct LatchFile {
+        std::unique_ptr<QFile> file;
+        std::atomic_bool suppressFileDeletion = false;
+        /// Creates the latch file. Sets `options->flags.potentiallyUncleanShutdownDetected` to true if the file
+        /// was there already (from an unclean shutdown from a previous run of Fulcrum). The path of the file is
+        /// `datadir/latch`.
+        /// @throw `Exception` if the file could not be created or if the pre-existing file could not be deleted
+        /// before being re-created.
+        /// @post The file exists, is kept open until app exit, and contains the current process PID.
+        LatchFile(Options &);
+        ~LatchFile(); ///< Deletes `datadir/latch` if it exists and if suppressFileDeletion is false.
+    };
+    std::optional<LatchFile> latchFile; // emplace'd explicitly in startup(), and reset in cleanup()
 };
 
 inline App *app() { return App::globalInstance(); }
