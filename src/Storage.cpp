@@ -1007,9 +1007,9 @@ namespace {
                     const auto txNum = batchNums[i];
                     if (batch[i].second != txNum) throw DatabaseError("txNum mismatch");
                     if (hash.length() != HashLen) throw DatabaseFormatError("bad record");
-                    const auto expect = makeKeyFromHash(hash).toByteArray();
+                    const auto expect = makeKeyFromHash(hash).toByteArray(false);
                     const auto &keyStr = batch[i].first;
-                    const auto key = QByteArray::fromRawData(keyStr.data(), keyStr.size());
+                    const auto key = ShallowTmp(keyStr.data(), keyStr.size());
                     if (key != expect)
                         throw DatabaseError(QString("record %1 does not match key. expected: %2, got: %3")
                                             .arg(txNum).arg(QString(expect.toHex()), QString(key.toHex())));
