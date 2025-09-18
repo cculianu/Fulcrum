@@ -27,6 +27,7 @@
 
 #include <QFileInfo>
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstring>
@@ -34,6 +35,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -276,7 +278,7 @@ DBRecordArray::BatchWriteContext::~BatchWriteContext()
     }
 }
 
-QByteArray DBRecordArray::readRandomCommon(const uint64_t recNum, std::optional<LastRead> *lastRead, QString *errStr) const
+QByteArray DBRecordArray::readSequentialInner(const uint64_t recNum, std::optional<LastRead> *lastRead, QString *errStr) const
 {
     QByteArray ret;
     if (auto nr = nRecs.load(); recNum < nr) {
@@ -316,7 +318,7 @@ QByteArray DBRecordArray::readRandomCommon(const uint64_t recNum, std::optional<
 QByteArray DBRecordArray::readRecord(const uint64_t recNum, QString *errStr) const
 {
     std::shared_lock g(rwlock);
-    return readRandomCommon(recNum, nullptr, errStr);
+    return readSequentialInner(recNum, nullptr, errStr);
 }
 
 std::vector<QByteArray> DBRecordArray::readRecords(const uint64_t recNumStart, size_t count, QString *errStr) const
@@ -332,7 +334,7 @@ std::vector<QByteArray> DBRecordArray::readRecords(const uint64_t recNumStart, s
     ret.reserve(count);
     std::optional<LastRead> cachedLastRead;
     for (uint64_t recNum = recNumStart; recNum < nR && count; --count, ++recNum) {
-        ret.emplace_back(readRandomCommon(recNum, &cachedLastRead, errStr));
+        ret.emplace_back(readSequentialInner(recNum, &cachedLastRead, errStr));
         if (static_cast<size_t>(ret.back().size()) != recSz) {
             if (errStr)
                 *errStr = QString("Unable to read record %1 from DB %2 (error was: '%3')")
@@ -344,59 +346,106 @@ std::vector<QByteArray> DBRecordArray::readRecords(const uint64_t recNumStart, s
     return ret;
 }
 
-std::vector<QByteArray> DBRecordArray::readRandomRecords(const std::vector<uint64_t> & recNums, QString *errStr, bool continueOnError) const
+std::vector<QByteArray> DBRecordArray::readRandomRecords(const std::span<const uint64_t> recNums, QString *errStr,
+                                                         const bool continueOnError) const
 {
-    std::multimap<uint64_t, size_t> recNumIndices; // maps recNum -> index in `recNums`
-    // create sorted map -- we do this to use readRandomCommon() in order for a hopeful performance boost
-    for (size_t i = 0, rsz = recNums.size(); i < rsz; ++i)
-        recNumIndices.emplace(recNums[i], i);
-    std::vector<QByteArray> ret(recNums.size(), QByteArray{}); // pre-sized
+    // The strategy we use in this function is to set everything up so we can use db.MultiGet to retrieve all the
+    // buckets we intend to read from. Thus, we must:
+    // 1. first decide which buckets we will need to get from the db
+    // 2. ensure the bucket keys are sorted by putting the bucketKeys we need to grab in a map
+    // 3. get the buckets from the db using db.MultiGet()
+    // 4. loop over the caller-specified recNums and construct the results from the bucket data we grabbed in (3)
+    //
+    // Error behavior for `continueOnError=false` means the caller expects a returned array that has valid results
+    // up to the first error. For `continueOnError=true`, the caller expects the returned array to be exactly recNums.size()
+    // and errors are indicated with empty QByteArrays in the results.
 
-    std::optional<LastRead> cachedLastRead;
-    struct Last {
-        uint64_t recNum;
-        QByteArray data;
-        Last(uint64_t r, const QByteArray &d) : recNum{r}, data{d} {}
-    };
-    std::optional<Last> lastRecNum;
-    bool doErrorCleanup = false;
-
-    // take a lock only after allocating all of the above
+    std::vector<QByteArray> results;
+    results.reserve(recNums.size());
+    // take a lock only after allocating the above
     std::shared_lock g(rwlock);
-    for (const auto & [recNum, index] : recNumIndices) {
-        if (lastRecNum && lastRecNum->recNum == recNum) {
-            // dupe recNum in caller array, just use Last value
-            ret[index] = std::as_const(lastRecNum->data);
-            continue;
-        }
-        // do read, leveraging that we are reading records in order and that we are using cachedLastRead for speed
-        const QByteArray &data = ret[index] = readRandomCommon(recNum, &cachedLastRead, errStr);
+    const auto numRecs = numRecords();
 
-        // oops, we got an error.. mark the doErrorCleanup flag .. but we cannot break out of loop yet because
-        // we must continue the request since some items at beginning of `ret` array may end up with valid results in
-        // them. Instead, we truncate `ret` in the !continueOnError case at the end of this function.. :/
-        if (data.isEmpty() && !continueOnError) [[unlikely]] {
-            doErrorCleanup = true;
+    // Sets the errStr (if not nullptr); also clears the errStr ptr if it did set it so we only report the first error.
+    auto setErrStr = [&errStr](QString && s) {
+        if (errStr) {
+            *errStr = std::move(s);
+            errStr = nullptr; // ensures we only ever set the error string once (first error we see)
+        }
+    };
+
+    // We do this in batches so as to risk using ridiculous amounts of memory
+    auto doBatch = [&](const std::span<const uint64_t> & batch) {
+        std::map<VarIntBE, ByteView> buckets;
+        for (const auto recNum : batch) {
+            if (recNum >= numRecs) {
+                // bad recNum
+                if (errStr) setErrStr(QString("%1: Record number %2 is not in the DB").arg(name()).arg(recNum));
+                // NB: Early return for the continueOnError==false case must be handled by last for() loop in this
+                // lambda, so that caller gets results up to the recNum that failed, as per API contract.
+                if (!continueOnError && buckets.empty())
+                    return false; // However, if we fail on the very first element in !continuOnError mode, we can just early return.
+                continue;
+            }
+            const auto bucketNum = recordNumToBucketNum(recNum);
+            buckets.try_emplace(makeKey(bucketNum), ByteView{});
         }
 
-        // cache last recNum to extra speed boost on duplicated recNums
-        if (!lastRecNum)
-            lastRecNum.emplace(recNum, data);
-        else if (lastRecNum->recNum != recNum) {
-            lastRecNum->recNum = recNum;
-            lastRecNum->data = data;
-        }
-    }
-    if (doErrorCleanup) [[unlikely]] {
-        // !continueOnError -> figure out where the first blank spot is in the return and truncate, then return
-        for (size_t i = 0; i < ret.size(); ++i) {
-            if (ret[i].isEmpty()) {
-                ret.resize(i);
-                break;
+        std::vector<rocksdb::PinnableSlice> values(buckets.size()); // needs to be in this higher scope because `buckets` points to this memory
+        if (!buckets.empty()) {
+            std::vector<rocksdb::Slice> keys;
+            keys.reserve(buckets.size());
+            for (const auto & [v, _] : buckets)
+                keys.emplace_back(v.byteView().toStringView());
+            std::vector<rocksdb::Status> statuses(keys.size());
+            // get buckets we will need from db
+            db.MultiGet(ropts, &cf, keys.size(), keys.data(), values.data(), statuses.data(), /* sorted = */true);
+            // collect results
+            auto it = buckets.begin();
+            for (size_t i = 0; i < keys.size(); ++i, ++it) {
+                if (!statuses[i].ok()) [[unlikely]] {
+                    if (errStr)
+                        setErrStr(QString("DB error for %1. Bucket number %2 is missing from the DB? Error was: %3")
+                                      .arg(name()).arg(it->first.value<quint64>()).arg(QString::fromStdString(statuses[i].ToString())));
+                    continue; // leave data empty for this bucket, error / early return will be handled by last for() loop below
+                }
+                it->second = values[i];
             }
         }
+
+        for (const auto recNum : batch) {
+            bool ok = false;
+            if (recNum < numRecs) {
+                const auto bucketNum = recordNumToBucketNum(recNum);
+                const auto & bucketBytes = buckets[bucketNum];
+                const size_t offset = recordNumOffsetFromBucketBase(recNum);
+                if (offset + recordSize() <= bucketBytes.size())  {
+                    // found; grab result, set ok
+                    results.emplace_back(bucketBytes.charData() + offset, QByteArray::size_type(recordSize()));
+                    ok = true;
+                } else if (errStr) // not found in bucket or we had an error retrieving this bucket from DB
+                    setErrStr(QString("%1: Record number %2 is not in the DB").arg(name()).arg(recNum));
+            } // else >= numRecs error case already handled by the topmost `for()` loop in this lambda
+            if (!ok) {
+                if (!continueOnError) return false;
+                results.emplace_back(); // empty result on error when continueOnError == true
+            }
+        }
+
+        return true;
+    };
+
+    constexpr size_t maxMemToUse = 8u * 1024u * 1024u; // 8 MiB
+    const size_t perBucketMem = recordSize() * bucketNumRecords(); // 512 bytes for txNum2TxHashDRA
+    const size_t batchSize = std::max<size_t>(1u, maxMemToUse / perBucketMem); // 16384 for txNum2TxHashDRA
+
+    for (size_t i = 0; i < recNums.size(); i += batchSize) {
+        const size_t thisBatchSize = std::min(recNums.size() - i, batchSize);
+        if ( ! doBatch(recNums.subspan(i, thisBatchSize)))
+            break;
     }
-    return ret;
+
+    return results;
 }
 
 std::unique_ptr<rocksdb::Iterator> DBRecordArray::seekToFirstBucket() const
@@ -426,6 +475,7 @@ uint64_t DBRecordArray::bucketNumFromDbKey(const ByteView &key)
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <numeric>
 #include <type_traits>
 #include <vector>
 
@@ -450,6 +500,7 @@ TEST_CASE(gen_hashes) {
     // randomize hashes
     QByteArray *lastH = nullptr;
     for (auto & h : hashes) {
+        h.detach();
         GetRandBytes(h.data(), h.size());
         TEST_CHECK_MESSAGE(!lastH || *lastH != h, "Something went wrong generating random hashes.. previous hash and this hash match!");
         lastH = &h;
@@ -484,78 +535,88 @@ TEST_CASE(batch_append) {
     TEST_CHECK(st.ok());
     TEST_CHECK(db->FlushWAL(true).ok());
     TEST_CHECK(dba->numRecords() == N);
-    Log() << "Wrote " << dba->numRecords() << " hahses";
+    Log() << "Wrote " << dba->numRecords() << " hashes";
+};
+
+auto threaded_reader = [&](const size_t nThreads, const size_t nBatch) {
+    if (!nBatch) throw InternalError("nBatch must be >0!");
+    const Tic t0;
+    dba.emplace(*db, *cf, HashLen, BUCKET_SIZE); // re-open
+    TEST_CHECK(dba->numRecords() == N);
+    std::vector<std::thread> thrds;
+    std::vector<int64_t> nsecsReadCallsPerThread(nThreads);
+    std::vector<size_t> countsPerThread(nThreads);
+    for (size_t i = 0; i < nThreads; ++i) {
+        thrds.emplace_back([&](const size_t thrNum){
+            for (size_t j = 0; j < hashes.size() * 2; j += nBatch) {
+                const bool continueOnError = InsecureRandRange(2);
+                std::vector<uint64_t> recNums(nBatch);
+                for (size_t k = 0; k < nBatch; ++k) {
+                    size_t idx = InsecureRandRange(N);
+                    recNums[k] = idx;
+                }
+                std::optional<size_t> badIndex;
+                if (InsecureRandRange(2)) {
+                    // test error case by asking for an invalid recnum somewhere in the batch
+                    badIndex = InsecureRandRange(recNums.size());
+                    recNums[*badIndex] = dba->numRecords() + InsecureRandRange(hashes.size());
+                }
+                countsPerThread[thrNum] += recNums.size();
+                std::vector<QByteArray> results;
+                QString err;
+                const qint64 ts = Util::getTimeNS();
+                qint64 tf{};
+                if (nBatch == 1) {
+                    // test individual read calls
+                    results.push_back(dba->readRecord(recNums.front(), &err));
+                    tf = Util::getTimeNS();
+                    // emulate behavior of batched reads for the TEST_CHECK code at end of this function
+                    if (badIndex && !continueOnError) results.resize(*badIndex);
+                } else {
+                    // test batched random read calls
+                    results = dba->readRandomRecords(recNums, &err, continueOnError);
+                    tf = Util::getTimeNS();
+                }
+                nsecsReadCallsPerThread[thrNum] += tf - ts;
+                // do checks
+                TEST_CHECK(err.isEmpty() == !badIndex);
+                if (continueOnError || !badIndex)
+                    TEST_CHECK(results.size() == recNums.size());
+                else
+                    TEST_CHECK(badIndex && results.size() == *badIndex);
+                for (size_t k = 0; k < results.size(); ++k) {
+                    if (!badIndex || k != *badIndex)
+                        TEST_CHECK(results[k] == hashes[recNums[k]]);
+                    else {
+                        TEST_CHECK(results[k].isEmpty());
+                        TEST_CHECK(recNums[k] >= dba->numRecords());
+                    }
+                }
+            }
+        }, i);
+    }
+    for (auto & t : thrds) t.join();
+    const auto totalRecsRead = std::accumulate(countsPerThread.begin(), countsPerThread.end(), size_t{});
+    if (nBatch == 1)
+        Log() << "Read " << totalRecsRead << " individual records randomly using " << thrds.size() << " concurrent threads";
+    else
+        Log() << "Read " << totalRecsRead << " batched records randomly using " << thrds.size() << " concurrent threads";
+    const auto cumNS = std::accumulate(nsecsReadCallsPerThread.begin(), nsecsReadCallsPerThread.end(), int64_t{});
+    Log() << "Cumulative read time: " << QString::number(cumNS / 1e6, 'f', 3) << " msec";
+    Log() << "Cost: " << QString::number(qint64(cumNS / int64_t(totalRecsRead))) << " nsecs per record";
 };
 
 // Read 1 record at a time randomly from 3 threads concurrently
-TEST_CASE(threaded_read) {
-    dba.emplace(*db, *cf, HashLen, BUCKET_SIZE); // re-open
-    std::vector<std::thread> thrds;
-    TEST_CHECK(dba->numRecords() == N);
-    std::atomic_size_t ctr{0};
-    QString fail_shared;
-    std::mutex fail_shared_mut;
-    for (size_t i = 0; i < 3; ++i) {
-        thrds.emplace_back([&]{
-            QString fail;
-            for (size_t i = 0; fail.isEmpty() && i < hashes.size() * 7 / 20; ++i) {
-                size_t idx = InsecureRandRange(hashes.size());
-                TEST_CHECK(dba->readRecord(idx, &fail) == hashes[idx]);
-                ++ctr;
-            }
-            if (!fail.isEmpty()) {
-                std::unique_lock l(fail_shared_mut);
-                fail_shared = fail;
-            }
-        });
-    }
-    for (auto & t : thrds) t.join();
-    if (!fail_shared.isEmpty()) throw Exception(fail_shared);
-    Log() << "Read " << ctr.load() << " individual records randomly using " << thrds.size() << " concurrent threads";
-};
-
+TEST_CASE(threaded_read) { threaded_reader(3, 1); };
+// Read 100 records at a time randomly from 3 threads concurrently
+TEST_CASE(threaded_read_bulk_100) { threaded_reader(3, 100); };
 // Read 1000 records at a time randomly from 3 threads concurrently
-TEST_CASE(threaded_read_bulk) {
-    std::vector<std::thread> thrds;
-    dba.emplace(*db, *cf, HashLen, BUCKET_SIZE); // re-open
-    TEST_CHECK(dba->numRecords() == N);
-    std::atomic_size_t ctr{0};
-    QString fail_shared;
-    std::mutex fail_shared_mut;
-    for (size_t i = 0; i < 3; ++i) {
-        thrds.emplace_back([&]{
-            QString fail;
-            constexpr size_t NBatch = 1000;
-            for (size_t i = 0; fail.isEmpty() && i < hashes.size() * 2; i += NBatch) {
-                std::vector<uint64_t> recNums(NBatch);
-                for (size_t j = 0; fail.isEmpty() && j < NBatch; ++j) {
-                    size_t idx = InsecureRandRange(N);
-                    recNums[j] = idx;
-                    ++ctr;
-                }
-                const auto results = dba->readRandomRecords(recNums, &fail, false);
-                TEST_CHECK(results.size() == recNums.size());
-                if (results.size() != recNums.size())
-                    fail = QString("Failed to read random records: ") + fail;
-                for (size_t i = 0; fail.isEmpty() && i < results.size(); ++i) {
-                    TEST_CHECK(results[i]== hashes[recNums[i]]);
-                    if (results[i] != hashes[recNums[i]])
-                        fail = QString("Record #%1, index %2 failed to compare equal!").arg(i).arg(recNums[i]);
-                }
-            }
-            if (!fail.isEmpty()) {
-                std::unique_lock l(fail_shared_mut);
-                fail_shared = fail;
-            }
-        });
-    }
-    for (auto & t : thrds) t.join();
-    if (!fail_shared.isEmpty()) throw Exception(fail_shared);
-    Log() << "Read " << ctr.load() << " batched records randomly using " << thrds.size() << " concurrent threads";
-};
+TEST_CASE(threaded_read_bulk_1000) { threaded_reader(3, 1000); };
+// Read 17,000 records at a time randomly from 3 threads concurrently
+TEST_CASE(threaded_read_bulk_17000) { threaded_reader(3, 17'000); };
 
+// truncate to N / 2, and verify
 TEST_CASE(truncate_half) {
-    // truncate to N / 2, and verify
     {
         rocksdb::WriteBatch batch;
         dba.emplace(*db, *cf, HashLen, BUCKET_SIZE); // re-open

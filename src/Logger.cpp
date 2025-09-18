@@ -50,7 +50,7 @@ namespace {
 
 Logger::Logger(QObject *parent) : QObject(parent)
 {
-    connect(this, &Logger::log, this, [this](int level, const QString &line){
+    connGotLine = connect(this, &Logger::log, this, [this](int level, const QString &line){
         // we do it in a closure because in this c'tor gotLine isn't defined yet (pure virtual)
         gotLine(level, line);
     });
@@ -82,6 +82,19 @@ bool ConsoleLogger::calcIsATty(bool stdOut)
 #endif
     return false;
 }
+
+bool ConsoleLogger::setDirectMode(bool b) /* override */
+{
+    if (b != isDirectMode()) {
+        disconnect(connGotLine);
+        connGotLine = connect(this, &Logger::log, this, [this](int level, const QString &line) { gotLine(level, line); },
+                              b ? Qt::DirectConnection : Qt::AutoConnection);
+        directMode = b;
+    }
+    return true;
+}
+
+bool ConsoleLogger::isDirectMode() const /* override */ { return directMode; }
 
 void ConsoleLogger::gotLine(int level, const QString &l)
 {

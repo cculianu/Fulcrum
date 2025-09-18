@@ -36,11 +36,18 @@ public:
     /// returns true if the logger is logging to a tty (and thus supports ANSI color codes, etc)
     virtual bool isaTTY() const { return false; }
 
+    /// Set "direct" mode on or off. Default is for it to be off. In direct mode the log() signal is connected
+    /// via Qt::DirectConnection to gotLine(). Returns false on error, true on success.
+    virtual bool setDirectMode(bool) { return false; }
+    virtual bool isDirectMode() const { return false;}
+
 signals:
     void log(int level, const QString & line); ///< call this or emit it to log a line
 
 protected:
     virtual void gotLine(int level, const QString &) = 0;
+
+    QMetaObject::Connection connGotLine;
 };
 
 class ConsoleLogger : public Logger
@@ -50,6 +57,9 @@ public:
 
     bool isaTTY() const override { return isATty; }
 
+    bool setDirectMode(bool) override;
+    bool isDirectMode() const override;
+
 protected:
     void gotLine(int level, const QString &) override;
 
@@ -57,6 +67,7 @@ private:
     const bool stdOut;
     const bool isATty;
     static bool calcIsATty(bool stdOut);
+    bool directMode = false;
 };
 
 /// On Windows this just prints to stdout. On Unix, calls syslog()
@@ -66,6 +77,8 @@ class SysLogger : public ConsoleLogger
 public:
     SysLogger(QObject *parent = nullptr);
     bool isaTTY() const override { return !opened && ConsoleLogger::isaTTY(); }
+
+    bool setDirectMode(bool) override { return false; }
 
 protected:
     void gotLine(int level, const QString &) override;

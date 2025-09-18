@@ -32,6 +32,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <shared_mutex>
 #include <string>
 #include <utility>
@@ -71,7 +72,7 @@ class DBRecordArray
         LastRead(uint64_t bn, std::string &&key, std::string &&value) : bucketNum{bn}, bucketKey{std::move(key)}, bucketValue{std::move(value)} {}
     };
 
-    QByteArray readRandomCommon(uint64_t recNum, std::optional<LastRead> *lastRead = nullptr, QString *errStr = nullptr) const;
+    QByteArray readSequentialInner(uint64_t recNum, std::optional<LastRead> *lastRead = nullptr, QString *errStr = nullptr) const;
 
 public:
 
@@ -111,7 +112,7 @@ public:
     /// New: If `continueOnError` is true, the returned vector will always be sized exactly the same as recNums.
     /// Any errors encountered will simply have empty QByteArrays inserted into the resulting vector. *errStr
     /// will be the last error encountered if there are errors.
-    std::vector<QByteArray> readRandomRecords(const std::vector<uint64_t> & recNums, QString *errStr = nullptr,
+    std::vector<QByteArray> readRandomRecords(std::span<const uint64_t> recNums, QString *errStr = nullptr,
                                               bool continueOnError = false) const;
 
     class BatchWriteContext {

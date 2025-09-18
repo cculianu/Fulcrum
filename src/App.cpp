@@ -672,6 +672,7 @@ void App::parseArgs()
             // custom hack used only for test/bench mode to enable/disable debug output in test mode from CLI args
             static std::once_flag once;
             std::call_once(once, [&] {
+                logger()->setDirectMode(true); // ensures any benches or tests that spawn threads that use Log(), etc, will lead to printed output
                 if (auto found = parser.optionNames(); const auto dbgct = (found.count("d") + found.count("debug"))) {
                     if (dbgct) options->verboseDebug = true;
                     if (dbgct > 1) options->verboseTrace = true;
@@ -717,11 +718,11 @@ void App::parseArgs()
             }
         }
         if (setCtr)
-            std::exit(0);
+            std::exit(EXIT_SUCCESS);
     } catch (const std::exception & e) {
         // bench or test execution failed with an exception
         Error(Log::Color::Magenta) << "Caught exception: " << e.what();
-        std::exit(1);
+        std::exit(EXIT_FAILURE);
     }
 
     const auto checkSupportsSsl = [] {
