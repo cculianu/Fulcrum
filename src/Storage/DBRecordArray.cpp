@@ -622,7 +622,7 @@ TEST_CASE(truncate_tenth) {
 TEST_CASE(exceptions) {
     // try mismatch on recSz
     static_assert (!std::is_base_of_v<DBRecordArray::Error, Exception>); // to ensure below works.. this is obviously always the case
-    dba.reset(); // close so below code runs.. to be paranoid in case invatiants change
+    dba.reset(); // close so below code runs.. to be paranoid in case invariants change
     // re-open on scope end
     Defer d([&]{ dba.emplace(*db, *cf, HashLen, BUCKET_SIZE); });
 
@@ -630,8 +630,14 @@ TEST_CASE(exceptions) {
     TEST_CHECK_THROW(DBRecordArray(*db, *cf, HashLen + 1 /* bad recsz */, BUCKET_SIZE), DBRecordArray::Error);
     TEST_CHECK_THROW(DBRecordArray(*db, *cf, HashLen, BUCKET_SIZE, 0x42 /* bad magic*/), DBRecordArray::Error);
     TEST_CHECK_THROW(DBRecordArray(*db, *cf, HashLen, BUCKET_SIZE + 1 /* non POT bucketSz */), DBRecordArray::Error);
-    TEST_CHECK_THROW(DBRecordArray(*db, *cf, HashLen, BUCKET_SIZE*2 /* mismatched bucketSz */), DBRecordArray::Error);
-    TEST_CHECK_THROW(DBRecordArray(*db, *cf, HashLen, BUCKET_SIZE/2 /* mismatched bucketSz */), DBRecordArray::Error);
+    Log() << "*** NOTE: Two warnings are to follow; they are expected to occur and are part of this unit test. ***";
+    size_t bucketSize1{}, bucketSize2{};
+    TEST_CHECK_NO_THROW(bucketSize1 = DBRecordArray(*db, *cf, HashLen, BUCKET_SIZE*2 /* mismatched bucketSz ok so long as it's POT */)
+                                          .bucketNumRecords());
+    TEST_CHECK_NO_THROW(bucketSize2 = DBRecordArray(*db, *cf, HashLen, BUCKET_SIZE/2 /* mismatched bucketSz ok so long as it's POT */)
+                                          .bucketNumRecords());
+    TEST_CHECK(bucketSize1 == BUCKET_SIZE);
+    TEST_CHECK(bucketSize2 == BUCKET_SIZE);
 };
 
 TEST_SUITE_END()
