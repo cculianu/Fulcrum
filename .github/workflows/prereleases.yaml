@@ -1,0 +1,45 @@
+# This is a github action which builds Fulcrum docker image and uploads it on Docker Hub
+# This action is triggered when a new pre-release is created. Recommended tag names are in semver format, for example: v1.0.0
+
+name: Publish Docker images for pre-releases
+
+on:
+  release:
+    types: [prereleased]
+
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+
+      # Setup environment
+      - name: Set WORKER_COUNT env
+        run: echo "WORKER_COUNT=$(nproc)" >> $GITHUB_ENV
+      - name: Set TAG_NAME env
+        run: echo "TAG_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+
+      - name: Login to docker hub
+        uses: docker/login-action@v1.6.0
+        with:
+          username: cculianu
+          password: ${{secrets.DOCKERHUB_PASSWORD}}
+
+      # If you want support for more platforms you can use our setup-qemu action:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
+      - name: Create buildx worker node
+        run: docker buildx create --use
+
+      # publish version tagged image
+      - name: Build docker image
+        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t cculianu/fulcrum:${{ env.TAG_NAME }} -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
