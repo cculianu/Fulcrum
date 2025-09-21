@@ -1,11 +1,11 @@
 # This is a github action which builds Fulcrum docker image and uploads it on Docker Hub
 # This action is triggered when a new tagged release is created. Recommended tag names are in semver format, for example: v1.0.0
 
-name: Publish
+name: Publish Docker images for releases
 
 on:
   release:
-    types: [created]
+    types: [released]
 
   workflow_dispatch:
 
