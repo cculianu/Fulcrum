@@ -26,8 +26,8 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 
 - *For running*:
   - A supported bitcoin full node with its JSON-RPC service enabled, preferably running on the same machine.
-    - *For **BCH***: Bitcoin Cash Node, Bitcoin Unlimited Cash, Flowee, and bchd have all been tested extensively and are known to work well with this software.
-    - *For **BTC***: Bitcoin Core v0.17.0 or later.  No other full nodes are supported by this software for BTC.
+    - *For **BCH***: Bitcoin Cash Node, Bitcoin Cash Unlimited, Flowee, and bchd have all been tested extensively and are known to work well with this software.
+    - *For **BTC***: Bitcoin Core v0.17.0 or later.  Bitcoin Knots is also rumored to work but is untested by the developer.
     - *For **LTC***: Litecoin Core v0.17.0 or later.  No other full nodes are supported by this software for LTC.
       - If using Litcoin Core v0.21.2 or above, your daemon is serializing data using mweb extensions. While Fulcrum understands this serialization format, your Electrum-LTC clients may not. You can run `litecoind` with `-rpcserialversion=1` to have your daemon return transactions in pre-mweb format which is understood by most Electrum-LTC clients.
     - The node must have txindex enabled e.g. `txindex=1`.
@@ -35,7 +35,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
     - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, BU 1.9.1+, or Litecoin Core).
   - *Recommended hardware*: Minimum 1GB RAM, 64-bit CPU, ~40GB disk space for mainnet BCH, 133GB for BTC (as of Aug 2023). For best results, use an SSD rather than an HDD.
 - *For compiling*: 
-  - `Qt Core` & `Qt Networking` libraries `5.15.2` or above (I use `5.15.2` myself).  Qt `5.15.1` (or earlier) is not supported.
+  - `Qt Core` & `Qt Networking` libraries `5.15.2` or above (I use `5.15.2` and `6.9.2` myself).  Qt `5.15.1` (or earlier) is not supported.
   - *Optional but recommended*:
     - `libzmq 4.x` development headers and library (also known as `libzmq3-dev` on Debian/Ubuntu and `zeromq-devel` on Fedora). Fulcrum will run just fine without linking against `libzmq`, but it will run better if you do link against `libzmq` and also turn on `zmqpubhashblock` notifications in `bitcoind` (zmq is only available on: Core, BCHN, or BU 1.9.1+).
     - `libminiupnpc 2.x/3.x` development headers and library (also known as `libminiupnpc-dev` on Debuan/Ubuntu and `miniupnpc-devel` on Fedora). Fulcrum will run just fine without this library, but it is needed if you want Fulcrum to use UPnP to open up firewall ports on your router (CLI arg: `--upnp`, conf var: `upnp=true`).
@@ -77,7 +77,7 @@ If you are still having trouble, [file an issue here in this github](https://git
 
 You may optionally build against the **system rocksdb** (Linux only) if your distribution offers `rocksdb` version `6.6.4` or newer.
 
-1. `qmake LIBS=-lrocksdb`  (to generate the Makefile **without** linking to the included static lib)
+1. `qmake LIBS+=-lrocksdb`  (to generate the Makefile **without** linking to the included static lib)
 2. `make clean && make -j8` (replace 8 here with the number of cores on your machine)
 
 **Note**: Some Linux distributions have been known to package `librocksdb.so` incorrectly. [See here for an example](https://bugs.archlinux.org/task/65093), so until I can be confident most distributions do it right, I am considering using the system `librocksdb.so` an ***experimental feature*** for the time being (in principle it should work ok if the library is compiled correctly).
