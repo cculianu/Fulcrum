@@ -114,11 +114,11 @@ public:
     /// Construct an instance from raw bytes such as QByteArray bytes. May throw std::invalid_argument if b is of the
     /// wrong format, or is empty.
     ///
-    /// Note that b must note have extra data at the end. If deserializing a byte stream that may have more bytes at
+    /// Note that b must not have extra data at the end. If deserializing a byte stream that may have more bytes at
     /// the end, use deserialize().
     static GenericVarInt fromBytes(const ByteView &b) {
         validate<std::invalid_argument>(b);
-        // accepted, below c'tor takes a shallow copy
+        // accepted, below c'tor takes a deep copy
         return GenericVarInt{Unchecked{}, b};
     }
 
