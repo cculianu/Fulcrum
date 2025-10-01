@@ -12,6 +12,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -626,12 +627,9 @@ protected:
 
 public:
     constexpr CScript() noexcept = default;
-    CScript(const_iterator pbegin, const_iterator pend)
-        : CScriptBase(pbegin, pend) {}
-    CScript(std::vector<uint8_t>::const_iterator pbegin,
-            std::vector<uint8_t>::const_iterator pend)
-        : CScriptBase(pbegin, pend) {}
-    CScript(const uint8_t *pbegin, const uint8_t *pend)
+
+    template <std::random_access_iterator It>
+    CScript(It pbegin, It pend)
         : CScriptBase(pbegin, pend) {}
 
     SERIALIZE_METHODS(CScript, obj) { READWRITEAS(CScriptBase, obj); }

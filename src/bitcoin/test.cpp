@@ -23,6 +23,7 @@
 
 #include <cstring>
 #include <new>
+#include <span>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -105,6 +106,7 @@ namespace bitcoin {
 #include <new>
 #include <numeric>
 #include <random>
+#include <source_location>
 #include <sstream>
 #include <tuple>
 #include <type_traits>
@@ -1155,10 +1157,14 @@ template <unsigned int N, typename T> class prevector_tester {
     bool passed = true;
     bitcoin::uint256 rand_seed;
 
-    template <typename A, typename B> void local_check_equal(A a, B b) {
-        local_check(a == b);
+#define local_check(expr) local_check_(std::source_location::current(), #expr, expr)
+#define local_check_equal(a, b) local_check(a == b)
+    void local_check_(const std::source_location &loc, const char *exprStr, bool b) {
+        if (!b)
+            Warning() << "Check failed: \"" << exprStr << "\", file: " << loc.file_name() << ", line: "
+                      << loc.line() << ", function: " << loc.function_name();
+        passed = passed && b;
     }
-    void local_check(bool b) { passed = passed && b; }
     void test() {
         const pretype &const_pre_vector = pre_vector;
         local_check_equal(real_vector.size(), pre_vector.size());
@@ -1315,6 +1321,8 @@ public:
     prevector_tester() {
         rand_seed = InsecureRand256();
     }
+#undef local_check_equal
+#undef local_check
 };
 
 TEST_SUITE(prevector)
@@ -1755,6 +1763,35 @@ TEST_SUITE(prevector)
         pv2.resize(35);
         TEST_CHECK(pv != pv2);
         TEST_CHECK(pv2 < pv);
+    };
+
+    TEST_CASE(PrevectorTestSpan) {
+        // Just ensure prevector can be implicitly and explicitly converted to std::span and that the result is sane.
+        auto GetSizeViaImplicitSpan = [](const std::span<const uint8_t> &sp){ return sp.size(); };
+        prevector<28, uint8_t> pvec;
+        for (size_t i = 0; i < 64; ++i) {
+            pvec.push_back(InsecureRandBits(8));
+            std::span<uint8_t> span{pvec}; // ensure c'tor works
+            std::span<const uint8_t> cspan{pvec};
+            auto test = [&] {
+                TEST_CHECK_EQUAL(span.size(), pvec.size());
+                TEST_CHECK_EQUAL(cspan.size(), pvec.size());
+                TEST_CHECK_EQUAL(GetSizeViaImplicitSpan(pvec), pvec.size());
+                TEST_CHECK(span.data() == pvec.data());
+                TEST_CHECK(cspan.data() == pvec.data());
+                auto it = cspan.rbegin();
+                auto it2 = pvec.rbegin();
+                for (size_t pos = pvec.size(); it != cspan.rend() && it2 != pvec.rend() && pos != 0; ++it, ++it2) {
+                    TEST_CHECK_EQUAL(*it, *it2);
+                    TEST_CHECK_EQUAL(*it, pvec[--pos]);
+                }
+                TEST_CHECK(it == cspan.rend() && it2 == pvec.rend());
+            };
+            test();
+            span = pvec; // ensure copy-assign works
+            cspan = pvec;
+            test();
+        }
     };
 TEST_SUITE_END()
 

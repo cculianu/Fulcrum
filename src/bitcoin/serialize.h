@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
+// Copyright (C) 2016-2025 Calin A. Culianu <calin.culianu@gmail.com>
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -18,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -55,79 +57,71 @@ struct deserialize_type {};
 static constexpr deserialize_type deserialize{};
 
 //! Safely convert odd char pointer types to standard ones.
-inline char *CharCast(char *c) {
-    return c;
-}
-inline char *CharCast(uint8_t *c) {
-    return (char *)c;
-}
-inline const char *CharCast(const char *c) {
-    return c;
-}
-inline const char *CharCast(const uint8_t *c) {
-    return (const char *)c;
-}
+inline char *CharCast(char *c) { return c; }
+inline char *CharCast(uint8_t *c) { return reinterpret_cast<char *>(c); }
+inline const char *CharCast(const char *c) { return c; }
+inline const char *CharCast(const uint8_t *c) { return reinterpret_cast<const char *>(c); }
 
 /**
  * Lowest-level serialization and conversion.
  * @note Sizes of these types are verified in the tests
  */
 template <typename Stream> inline void ser_writedata8(Stream &s, uint8_t obj) {
-    s.write((char *)&obj, 1);
+    s.write(reinterpret_cast<const char *>(&obj), 1);
 }
 template <typename Stream>
 inline void ser_writedata16(Stream &s, uint16_t obj) {
     obj = htole16(obj);
-    s.write((char *)&obj, 2);
+    s.write(reinterpret_cast<const char *>(&obj), 2);
 }
 template <typename Stream>
 inline void ser_writedata16be(Stream &s, uint16_t obj) {
     obj = htobe16(obj);
-    s.write((char *)&obj, 2);
+    s.write(reinterpret_cast<const char *>(&obj), 2);
 }
 template <typename Stream>
 inline void ser_writedata32(Stream &s, uint32_t obj) {
     obj = htole32(obj);
-    s.write((char *)&obj, 4);
+    s.write(reinterpret_cast<const char *>(&obj), 4);
 }
 template <typename Stream>
 inline void ser_writedata32be(Stream &s, uint32_t obj) {
     obj = htobe32(obj);
-    s.write((char *)&obj, 4);
+    s.write(reinterpret_cast<const char *>(&obj), 4);
 }
 template <typename Stream>
 inline void ser_writedata64(Stream &s, uint64_t obj) {
     obj = htole64(obj);
-    s.write((char *)&obj, 8);
+    s.write(reinterpret_cast<const char *>(&obj), 8);
 }
 template <typename Stream> inline uint8_t ser_readdata8(Stream &s) {
     uint8_t obj;
-    s.read((char *)&obj, 1);
+    s.read(reinterpret_cast<char *>(&obj), 1);
     return obj;
 }
 template <typename Stream> inline uint16_t ser_readdata16(Stream &s) {
     uint16_t obj;
-    s.read((char *)&obj, 2);
+    s.read(reinterpret_cast<char *>(&obj), 2);
     return le16toh(obj);
 }
 template <typename Stream> inline uint16_t ser_readdata16be(Stream &s) {
     uint16_t obj;
-    s.read((char *)&obj, 2);
+    s.read(reinterpret_cast<char *>(&obj), 2);
     return be16toh(obj);
 }
 template <typename Stream> inline uint32_t ser_readdata32(Stream &s) {
     uint32_t obj;
-    s.read((char *)&obj, 4);
+    s.read(reinterpret_cast<char *>(&obj), 4);
     return le32toh(obj);
 }
 template <typename Stream> inline uint32_t ser_readdata32be(Stream &s) {
     uint32_t obj;
-    s.read((char *)&obj, 4);
+    s.read(reinterpret_cast<char *>(&obj), 4);
     return be32toh(obj);
 }
 template <typename Stream> inline uint64_t ser_readdata64(Stream &s) {
     uint64_t obj;
-    s.read((char *)&obj, 8);
+    s.read(reinterpret_cast<char *>(&obj), 8);
     return le64toh(obj);
 }
 inline uint64_t ser_double_to_uint64(double x) {
@@ -304,6 +298,14 @@ inline void Serialize(Stream &s, const std::array<char, N> &a) {
 }
 #endif
 template <typename Stream>
+inline void Serialize(Stream &s, const std::span<const uint8_t> &span) {
+    s.write(CharCast(span.data()), span.size());
+}
+template <typename Stream>
+inline void Serialize(Stream &s, const std::span<uint8_t> &span) {
+    s.write(CharCast(span.data()), span.size());
+}
+template <typename Stream>
 inline void Serialize(Stream &s, const Span<const uint8_t> &span) {
     s.write(CharCast(span.data()), span.size());
 }
@@ -375,6 +377,10 @@ template <typename Stream> inline void Serialize(Stream &s, bool a) {
 template <typename Stream> inline void Unserialize(Stream &s, bool &a) {
     char f = ser_readdata8(s);
     a = f;
+}
+template <typename Stream>
+inline void Unserialize(Stream &s, std::span<uint8_t> &span) {
+    s.read(CharCast(span.data()), span.size());
 }
 template <typename Stream>
 inline void Unserialize(Stream &s, Span<uint8_t> &span) {
@@ -846,7 +852,7 @@ template <typename Stream, typename C>
 void Serialize(Stream &os, const std::basic_string<C> &str) {
     WriteCompactSize(os, str.size());
     if (!str.empty()) {
-        os.write((char *)str.data(), str.size() * sizeof(C));
+        os.write(reinterpret_cast<const char *>(str.data()), str.size() * sizeof(C));
     }
 }
 
@@ -855,7 +861,7 @@ void Unserialize(Stream &is, std::basic_string<C> &str) {
     size_t nSize = ReadCompactSize(is);
     str.resize(nSize);
     if (nSize != 0) {
-        is.read((char *)str.data(), nSize * sizeof(C));
+        is.read(reinterpret_cast<char *>(str.data()), nSize * sizeof(C));
     }
 }
 

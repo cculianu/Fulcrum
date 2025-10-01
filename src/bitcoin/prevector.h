@@ -51,147 +51,10 @@ public:
     using const_reference = const value_type &;
     using pointer = value_type *;
     using const_pointer = const value_type *;
-
-    class iterator {
-        T *ptr;
-
-    public:
-        using difference_type = Diff;
-        using value_type = T;
-        using pointer = T *;
-        using const_pointer = const T *;
-        using reference = T &;
-        using const_reference = const T &;
-        using iterator_category = std::random_access_iterator_tag;
-        iterator() : ptr(nullptr) {}
-        iterator(pointer ptr_) : ptr(ptr_) {}
-        reference operator*() { return *ptr; }
-        const_reference operator*() const { return *ptr; }
-        pointer operator->() { return ptr; }
-        const_pointer operator->() const { return ptr; }
-        reference operator[](difference_type pos) { return ptr[pos]; }
-        const_reference operator[](difference_type pos) const { return ptr[pos]; }
-        iterator &operator++() {
-            ++ptr;
-            return *this;
-        }
-        iterator &operator--() {
-            --ptr;
-            return *this;
-        }
-        iterator operator++(int) { return iterator(ptr++); }
-        iterator operator--(int) { return iterator(ptr--); }
-        difference_type friend operator-(iterator a, iterator b) { return a.ptr - b.ptr;  }
-        iterator operator+(difference_type n) const { return iterator(ptr + n); }
-        friend iterator operator+(difference_type n, iterator b) { return iterator(b.ptr + n); }
-        iterator &operator+=(difference_type n) {
-            ptr += n;
-            return *this;
-        }
-        iterator operator-(difference_type n) const { return iterator(ptr - n); }
-        iterator &operator-=(difference_type n) {
-            ptr -= n;
-            return *this;
-        }
-        auto operator<=>(const iterator &) const = default;
-    };
-
-    class reverse_iterator {
-        T *ptr;
-
-    public:
-        using difference_type = Diff;
-        using value_type = T;
-        using pointer = T *;
-        using const_pointer = const T *;
-        using reference = T &;
-        using const_reference = const T &;
-        using iterator_category = std::bidirectional_iterator_tag;
-        reverse_iterator() : ptr(nullptr) {}
-        reverse_iterator(pointer ptr_) : ptr(ptr_) {}
-        reference operator*() { return *ptr; }
-        const_reference operator*() const { return *ptr; }
-        pointer operator->() { return ptr; }
-        const_pointer operator->() const { return ptr; }
-        reverse_iterator &operator--() {
-            ++ptr;
-            return *this;
-        }
-        reverse_iterator &operator++() {
-            --ptr;
-            return *this;
-        }
-        reverse_iterator operator++(int) { return reverse_iterator(ptr--); }
-        reverse_iterator operator--(int) { return reverse_iterator(ptr++); }
-        bool operator==(reverse_iterator x) const { return ptr == x.ptr; }
-    };
-
-    class const_iterator {
-        const T *ptr;
-
-    public:
-        using difference_type = Diff;
-        using value_type = const T;
-        using pointer = const T *;
-        using reference = const T &;
-        using iterator_category = std::random_access_iterator_tag;
-        const_iterator() : ptr(nullptr) {}
-        const_iterator(pointer ptr_) : ptr(ptr_) {}
-        const_iterator(iterator x) : ptr(&(*x)) {}
-        reference operator*() const { return *ptr; }
-        pointer operator->() const { return ptr; }
-        reference operator[](difference_type pos) const { return ptr[pos]; }
-        const_iterator &operator++() {
-            ++ptr;
-            return *this;
-        }
-        const_iterator &operator--() {
-            --ptr;
-            return *this;
-        }
-        const_iterator operator++(int) { return const_iterator(ptr++); }
-        const_iterator operator--(int) { return const_iterator(ptr--); }
-        difference_type friend operator-(const_iterator a, const_iterator b) { return a.ptr - b.ptr; }
-        const_iterator operator+(difference_type n) const { return const_iterator(ptr + n); }
-        friend const_iterator operator+(difference_type n, const_iterator b) { return const_iterator(b.ptr + n); }
-        const_iterator &operator+=(difference_type n) {
-            ptr += n;
-            return *this;
-        }
-        const_iterator operator-(difference_type n) const { return const_iterator(ptr - n); }
-        const_iterator &operator-=(difference_type n) {
-            ptr -= n;
-            return *this;
-        }
-        auto operator<=>(const const_iterator &) const = default;
-    };
-
-    class const_reverse_iterator {
-        const T *ptr;
-
-    public:
-        using difference_type = Diff;
-        using value_type = const T;
-        using pointer = const T *;
-        using reference = const T &;
-        using iterator_category = std::bidirectional_iterator_tag;
-        const_reverse_iterator() : ptr(nullptr) {}
-        const_reverse_iterator(pointer ptr_) : ptr(ptr_) {}
-        const_reverse_iterator(reverse_iterator x) : ptr(&(*x)) {}
-        reference operator*() const { return *ptr; }
-        pointer operator->() const { return ptr; }
-        const_reverse_iterator &operator--() {
-            ++ptr;
-            return *this;
-        }
-        const_reverse_iterator &operator++() {
-            --ptr;
-            return *this;
-        }
-        const_reverse_iterator operator++(int) { return const_reverse_iterator(ptr--); }
-        const_reverse_iterator operator--(int) { return const_reverse_iterator(ptr++); }
-        bool operator==(const_reverse_iterator x) const { return ptr == x.ptr; }
-    };
+    using iterator = pointer;
+    using const_iterator = const_pointer;
+    using reverse_iterator = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
 private:
 #pragma pack(push,1) // push alignment 1 onto alignment stack /* Calin asks: Is this always safe on every arch?! */
@@ -203,26 +66,26 @@ private:
         } s;
     };
 #pragma pack(pop)
-    alignas(byte *) direct_or_indirect _union = {};
-    size_type _size = 0;
+    alignas(byte *) direct_or_indirect m_union = {};
+    size_type m_size = 0;
     static_assert (alignof(byte *) % alignof(size_type) == 0 && sizeof(byte *) % alignof(size_type) == 0,
                    "size_type cannot have more restrictive alignment requirement than pointer");
     static_assert (alignof(byte *) % alignof(T) == 0,
                    "value_type T cannot have more restrictive alignment requirement than pointer");
 
     T *direct_ptr(difference_type pos) noexcept {
-        return reinterpret_cast<T *>(_union.direct) + pos;
+        return reinterpret_cast<T *>(m_union.direct) + pos;
     }
     const T *direct_ptr(difference_type pos) const noexcept {
-        return reinterpret_cast<const T *>(_union.direct) + pos;
+        return reinterpret_cast<const T *>(m_union.direct) + pos;
     }
     T *indirect_ptr(difference_type pos) noexcept {
-        return reinterpret_cast<T *>(_union.s.indirect) + pos;
+        return reinterpret_cast<T *>(m_union.s.indirect) + pos;
     }
     const T *indirect_ptr(difference_type pos) const noexcept {
-        return reinterpret_cast<const T *>(_union.s.indirect) + pos;
+        return reinterpret_cast<const T *>(m_union.s.indirect) + pos;
     }
-    constexpr bool is_direct() const noexcept { return _size <= N; }
+    constexpr bool is_direct() const noexcept { return m_size <= N; }
 
     static byte *reallocate(byte *ptr, std::size_t nbytes) {
         // Modified by Calin: the original code asserted to check malloc.
@@ -247,20 +110,20 @@ private:
                 T *dst = direct_ptr(0);
                 std::memcpy(dst, src, size() * sizeof(T));
                 std::free(indirect);
-                _size -= N + 1;
+                m_size -= N + 1;
             }
         } else {
             if (!is_direct()) {
-                _union.s.indirect = reallocate(_union.s.indirect, sizeof(T) * new_capacity);
-                _union.s.capacity = new_capacity;
+                m_union.s.indirect = reallocate(m_union.s.indirect, sizeof(T) * new_capacity);
+                m_union.s.capacity = new_capacity;
             } else {
                 byte *new_indirect = reallocate(nullptr, sizeof(T) * new_capacity);
                 T *src = direct_ptr(0);
                 T *dst = reinterpret_cast<T *>(new_indirect);
                 std::memcpy(dst, src, size() * sizeof(T));
-                _union.s.indirect = new_indirect;
-                _union.s.capacity = new_capacity;
-                _size += N + 1;
+                m_union.s.indirect = new_indirect;
+                m_union.s.capacity = new_capacity;
+                m_size += N + 1;
             }
         }
     }
@@ -283,8 +146,8 @@ private:
             new (static_cast<void *>(dst++)) T(value);
     }
 
-    template <typename InputIterator>
-    static void fill(T *dst, InputIterator first, InputIterator last) {
+    template <std::input_iterator It>
+    static void fill(T *dst, It first, It last) {
         while (first != last)
             new (static_cast<void *>(dst++)) T(*first++);
     }
@@ -303,7 +166,7 @@ private:
         }
         const size_type increase = new_size - cur_size;
         if (!uninitialized) fill(item_ptr(cur_size), increase);
-        _size += increase;
+        m_size += increase;
     }
 
 
@@ -313,18 +176,18 @@ public:
         if (capacity() < n) {
             change_capacity(n);
         }
-        _size += n;
+        m_size += n;
         fill(item_ptr(0), n, val);
     }
 
-    template <typename InputIterator>
-    void assign(InputIterator first, InputIterator last) {
+    template <std::random_access_iterator It>
+    void assign(It first, It last) {
         size_type n = last - first;
         clear();
         if (capacity() < n) {
             change_capacity(n);
         }
-        _size += n;
+        m_size += n;
         fill(item_ptr(0), first, last);
     }
 
@@ -334,22 +197,22 @@ public:
 
     explicit prevector(size_type n, const T &val) {
         change_capacity(n);
-        _size += n;
+        m_size += n;
         fill(item_ptr(0), n, val);
     }
 
-    template <typename InputIterator>
-    prevector(InputIterator first, InputIterator last) {
+    template <std::random_access_iterator It>
+    prevector(It first, It last) {
         size_type n = last - first;
         change_capacity(n);
-        _size += n;
+        m_size += n;
         fill(item_ptr(0), first, last);
     }
 
     prevector(const prevector &other) {
         size_type n = other.size();
         change_capacity(n);
-        _size += n;
+        m_size += n;
         fill(item_ptr(0), other.begin(), other.end());
     }
 
@@ -368,7 +231,7 @@ public:
         return *this;
     }
 
-    size_type size() const noexcept { return is_direct() ? _size : _size - N - 1; }
+    size_type size() const noexcept { return is_direct() ? m_size : m_size - N - 1; }
 
     bool empty() const noexcept { return size() == 0; }
 
@@ -377,20 +240,16 @@ public:
     iterator end() { return iterator(item_ptr(size())); }
     const_iterator end() const { return const_iterator(item_ptr(size())); }
 
-    reverse_iterator rbegin() { return reverse_iterator(item_ptr(size() - 1)); }
-    const_reverse_iterator rbegin() const {
-        return const_reverse_iterator(item_ptr(size() - 1));
-    }
-    reverse_iterator rend() { return reverse_iterator(item_ptr(-1)); }
-    const_reverse_iterator rend() const {
-        return const_reverse_iterator(item_ptr(-1));
-    }
+    reverse_iterator rbegin() { return reverse_iterator(end()); }
+    const_reverse_iterator rbegin() const { return const_reverse_iterator(end()); }
+    reverse_iterator rend() { return reverse_iterator(begin()); }
+    const_reverse_iterator rend() const { return const_reverse_iterator(begin()); }
 
     size_t capacity() const noexcept {
         if (is_direct()) {
             return N;
         } else {
-            return _union.s.capacity;
+            return m_union.s.capacity;
         }
     }
 
@@ -421,7 +280,7 @@ public:
         }
         T *ptr = item_ptr(p);
         std::memmove(ptr + 1, ptr, (size() - p) * sizeof(T));
-        _size++;
+        ++m_size;
         new (static_cast<void *>(ptr)) T(value);
         return iterator(ptr);
     }
@@ -434,12 +293,12 @@ public:
         }
         T *ptr = item_ptr(p);
         std::memmove(ptr + count, ptr, (size() - p) * sizeof(T));
-        _size += count;
+        m_size += count;
         fill(item_ptr(p), count, value);
     }
 
-    template <typename InputIterator>
-    void insert(iterator pos, InputIterator first, InputIterator last) {
+    template <std::random_access_iterator It>
+    void insert(iterator pos, It first, It last) {
         size_type p = pos - begin();
         difference_type count = last - first;
         size_type new_size = size() + count;
@@ -448,7 +307,7 @@ public:
         }
         T *ptr = item_ptr(p);
         std::memmove(ptr + count, ptr, (size() - p) * sizeof(T));
-        _size += count;
+        m_size += count;
         fill(ptr, first, last);
     }
 
@@ -463,7 +322,7 @@ public:
         // representation (with capacity N and size <= N).
         iterator p = first;
         byte *const endp = reinterpret_cast<byte *>(&*end());
-        _size -= last - p;
+        m_size -= last - p;
         std::memmove(&*first, &*last, endp - reinterpret_cast<byte *>(&*last));
         return first;
     }
@@ -474,7 +333,7 @@ public:
             change_capacity(new_size + (new_size >> 1));
         }
         new (item_ptr(size())) T(std::forward<Args>(args)...);
-        _size++;
+        ++m_size;
     }
 
     void push_back(const T &value) { emplace_back(value); }
@@ -491,15 +350,15 @@ public:
 
     void swap(prevector &other) noexcept {
         if (&other != this) {
-            std::swap(_union, other._union);
-            std::swap(_size, other._size);
+            std::swap(m_union, other.m_union);
+            std::swap(m_size, other.m_size);
         }
     }
 
     ~prevector() noexcept {
         if (!is_direct()) {
-            std::free(_union.s.indirect);
-            _union.s.indirect = nullptr;
+            std::free(m_union.s.indirect);
+            m_union.s.indirect = nullptr;
         }
     }
 
@@ -518,7 +377,7 @@ public:
         if (is_direct()) {
             return 0;
         } else {
-            return sizeof(T) * _union.s.capacity;
+            return sizeof(T) * m_union.s.capacity;
         }
     }
 
