@@ -445,17 +445,15 @@ TEST_SUITE(uint256)
             {
                 // Note: this pointer is to data on the stack and should not be freed!
                 uint256 *uninitialized = new (alignedPtr) uint256(uint256::Uninitialized); // explicitly does not initialize the data
-                unsigned uninitializedCtr{}, uninitializedCtr2{};
-                size_t i{};
-                // Ensure the uninitialized c'tor left the data buffer unmolested;
-                // std::launder is necessary here to prevent uninitialized warnings on some compilers.
-                for (const auto ch : *std::launder(uninitialized)) {
-                    uninitializedCtr += unsigned(ch == uninitializedByte); // false = 0, true = 1
-                    uninitializedCtr2 += unsigned(std::launder(alignedPtr)[i++] == uninitializedByte);
+                TEST_CHECK(uninitialized->data() == alignedPtr);
+                uninitialized->~uint256(); // end object lifetime immediately
+                alignedPtr = std::launder(alignedPtr);
+                unsigned uninitializedCtr = 0;
+                // Ensure the uninitialized c'tor left the data buffer unmolested
+                for (size_t i = 0; i < uint256::size(); ++i) {
+                    uninitializedCtr += unsigned(alignedPtr[i] == uninitializedByte); // false = 0, true = 1
                 }
                 TEST_CHECK(uninitializedCtr == uint256::size());
-                TEST_CHECK(uninitializedCtr2 == uint256::size());
-                uninitialized->~uint256(); // end lifetime (here for correctness)
             }
 #       if defined(__GNUC__) && !defined(__clang__)
 #           pragma GCC diagnostic pop
