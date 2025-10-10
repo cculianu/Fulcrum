@@ -8,7 +8,7 @@ test -n "$here" -a -d "$here" || (echo "Cannot determine build dir. FIXME!" && e
 . "$here"/common/common.sh # functions we use below (fail, et al)
 
 if [ -z "$1" ]; then
-    info "Please specify a build platform as the first argument, one of: windows linux linux_ub22 linux_ub16 (or short versions: win lin newlin oldlin)"
+    info "Please specify a build platform as the first argument, one of: windows linux linux_ub22 (or short versions: win lin newlin)"
     exit 1
 fi
 plat="$1"
@@ -70,14 +70,10 @@ case "$plat" in
     "linux_ub16"|"oldlinux"|"oldlin"|"lin_ub16")
         fail "${plat} is no longer supported after the upgrade to C++20. Please use one of the other options: windows, linux, linux_ub20, linux_ub22"
         # Below is not reached
-        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
-        plat=linux
-        docker_img_name="fulcrum-builder/qt:linux_ub16"
-        docker_cont_name="fulcrum_cont_qt_linux_ub16_$$"
-        suffix="_ub16"
+        exit 1
         ;;
     *)
-        fail "Unknown platform \"$plat\". Please specify one of: windows linux linux_ub22 linux_ub20 linux_ub16"
+        fail "Unknown platform \"$plat\". Please specify one of: windows linux linux_ub22 linux_ub20"
         ;;
 esac
 

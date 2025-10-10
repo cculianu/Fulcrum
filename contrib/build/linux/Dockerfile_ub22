@@ -34,29 +34,31 @@ RUN \
     mkdir -p /opt/local/qt && \
     cd /opt && \
     echo "💬  \033[1;36mDownloading Qt sources ...\033[0m" && \
-    wget -q https://download.qt.io/archive/qt/5.15/5.15.6/single/qt-everywhere-opensource-src-5.15.6.tar.xz && \
+    wget -q https://download.qt.io/archive/qt/5.15/5.15.17/single/qt-everywhere-opensource-src-5.15.17.tar.xz && \
     echo "💬  \033[1;36mExtracting archive ...\033[0m" && \
-    tar xf qt-everywhere-opensource-src-5.15.6.tar.xz && \
-    rm qt-everywhere-opensource-src-5.15.6.tar.xz && \
-    cd qt-everywhere-src-5.15.6 && \
-    echo "💬  \033[1;36mPatching Qt ...\033[0m" && \
-    cd qtbase && wget https://download.qt.io/archive/qt/5.15/CVE-2022-37434-qtbase-5.15.patch  && \
-    patch -p1 < CVE-2022-37434-qtbase-5.15.patch && rm -vf CVE-2022-37434-qtbase-5.15.patch && cd .. \
+    tar -xf qt-everywhere-opensource-src-5.15.17.tar.xz && \
+    rm qt-everywhere-opensource-src-5.15.17.tar.xz && \
+    cd qt-everywhere-src-5.15.17 && \
     echo "💬  \033[1;36mConfiguring Qt ...\033[0m" && \
     ./configure -opensource -confirm-license -release -static -nomake tests -nomake examples -no-compile-examples \
-        -prefix /opt/local/qt -no-gui -no-sse2 -openssl-linked -no-shared -c++std c++17 -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
-        -no-ico -no-libpng -no-libjpeg -strip -no-opengl -no-sqlite -no-glib -no-iconv -optimize-size -no-harfbuzz -no-sql-sqlite -no-sql-mysql \
-        -qpa 'linuxfb' -no-feature-accessibility -nomake tools -no-linuxfb -no-xcb -no-feature-sqlmodel -no-feature-itemmodeltester \
-        -no-feature-sessionmanager -no-feature-vnc -no-icu -skip qtconnectivity \
-        -qt-pcre -qt-zlib -no-tiff -no-webp -no-gstreamer -no-libinput \
-        -skip qtwebengine -skip qt3d -skip qtlocation -skip qtquick3d && \
+        -prefix /opt/local/qt -no-gui -no-sse2 -no-sse3 -no-ssse3 -no-sse4.1 -no-sse4.2 -no-avx -no-avx2 -no-avx512 \
+        -openssl-linked -no-shared -c++std c++17 -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
+        -no-ico -no-libpng -no-libjpeg -strip -no-opengl -no-sqlite -no-glib -no-iconv -no-harfbuzz -no-sql-sqlite \
+        -no-sql-mysql -qpa 'linuxfb' -no-feature-accessibility -nomake tools -no-linuxfb -no-xcb -no-feature-sqlmodel \
+        -no-feature-itemmodeltester -no-feature-sessionmanager -no-feature-vnc -no-icu -skip qtconnectivity -qt-pcre \
+        -qt-zlib -no-tiff -no-webp  -no-libinput -skip qtwebengine -skip qt3d -skip qtlocation -skip qtquick3d \
+        -no-feature-action -no-feature-animation  -no-feature-big_codecs   -no-feature-clipboard -no-feature-codecs \
+        -no-feature-cups -no-feature-cursor  -no-feature-desktopservices -no-feature-draganddrop \
+        -no-feature-jalalicalendar -no-feature-movie -no-feature-pdf -no-feature-picture -no-feature-valgrind \
+        -skip multimedia -skip serialbus -skip tools -skip gamepad -skip serialport -skip sensors -skip quickcontrols2 \
+        -skip speech && \
     echo "" && echo "💬  \033[1;36mCompiling Qt ...\033[0m" && \
     make -j $(nproc) && \
     echo "" && echo "💬  \033[1;36mInstalling Qt ...\033[0m" && \
     make install && \
     cd /opt && \
     echo "" && echo "💬  \033[1;36mCleaning up ...\033[0m" && \
-    rm -rf qt-everywhere-src-5.15.6 && \
+    rm -rf qt-everywhere-src-5.15.17 && \
     echo "" && echo "👍  \033[1;32mGCC Version:\033[0m" && \
     gcc --version && \
     echo "👍  \033[1;32mQt Version:\033[0m" && \
