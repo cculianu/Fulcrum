@@ -18,6 +18,9 @@
 //
 #include "UPnP.h"
 
+#include "Common.h"
+#include "Version.h"
+
 #include <QList>
 #include <QMetaObject>
 
@@ -125,15 +128,34 @@ struct UPnP::Context {
         }
 
         std::unique_lock g(rwlock);
+        char wanaddr [[maybe_unused]] [64] = {};
 
         /* Get valid IGD */
 #if MINIUPNPC_API_VERSION <= 17
         r = UPNP_GetValidIGD(devlist, &urls, &data, lanaddr, sizeof(lanaddr));
 #else
-        r = UPNP_GetValidIGD(devlist, &urls, &data, lanaddr, sizeof(lanaddr), nullptr, 0);
+        r = UPNP_GetValidIGD(devlist, &urls, &data, lanaddr, sizeof(lanaddr), wanaddr, sizeof(wanaddr));
 #endif
+        switch(r) {
+        case 0: break; /* no IGD */
+        case 1: /* UPNP_CONNECTED_IGD */
+            DebugM("Found valid IGD: ", QString::fromUtf8(urls.controlURL));
+            break;
+        case 2: /* UPNP_PRIVATEIP_IGD */
+            DebugM("Found an IGD with a reserved IP address (", QString::fromUtf8(wanaddr), "): ", QString::fromUtf8(urls.controlURL));
+            break;
+        case 3: /* UPNP_DISCONNECTED_IGD */
+            DebugM("Found a (not connected?) IGD: ", QString::fromUtf8(urls.controlURL));
+            break;
+        case 4: /* UPNP_UNKNOWN_DEVICE */
+            DebugM("UPnP unknown device: ", QString::fromUtf8(urls.controlURL));
+            break;
+        default: /* everything else is some unexpected API return value */
+            Warning() << "UPNP_GetValidIGD unexpected return value: " << r;
+            break;
+        }
 
-        if (r != 1) {
+        if (r != 1 && r != 2) {
             Error("No valid UPnP IGDs found (r=%d; %s)", r, strupnperror(r));
             return false;
         }
@@ -184,6 +206,16 @@ void UPnP::run(const std::string name)
         Error() << "MapSpec set is empty!";
         return;
     }
+
+    // Warn of potential problems if on an unpatched miniupnpc (may be a problem on non-win32 systems)
+    if constexpr (not isWindows()) {
+        // NB: assumption here is that 2.3.4 (unpublished) will contain the necessary fixes.
+        if (const QString v = MINIUPNPC_VERSION; !v.endsWith("-calin") && Version(v) < Version(2, 3, 4))
+            Warning() << "Potentially buggy version of miniupnpc (" << MINIUPNPC_VERSION << ") was used when compiling "
+                      << APPNAME << ". Port-mapping may fail in some corner-case circumstances!"
+                      << " Please use the patched version available here: https://github.com/cculianu/miniupnpc.";
+    }
+
     Log() << "UPnP thread started, will manage " << mappings.size() << " port "
           << Util::Pluralize("mapping", mappings.size()) << ", probing for IGDs ...";
 

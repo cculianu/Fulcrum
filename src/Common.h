@@ -19,6 +19,23 @@
 #pragma once
 
 #include <QString>
+#include <QtGlobal>
+
+// Ensure we get the proper system/version detection macros from future versions of Qt
+#if __has_include(<QtSystemDetection>)
+#include <QtSystemDetection>
+#endif
+#if __has_include(<QtVersion>)
+#include <QtVersion>
+#endif
+#if __has_include(<QtVersionChecks>)
+#include <QtVersionChecks>
+#endif
+
+// Ensure minimum version requriement is met
+#if (QT_VERSION < QT_VERSION_CHECK(5, 12, 5)) || (QT_VERSION == QT_VERSION_CHECK(5, 13, 0))
+#error Fulcrum requires Qt 5.12.5 (or later) or Qt 5.13.1 (or later) to be successfully built without errors.  Please use Qt 5.12.5+ or Qt 5.13.1+ to build this codebase.
+#endif
 
 #include <cstdint>
 #include <exception>
@@ -59,6 +76,8 @@ inline constexpr bool isReleaseBuild() { return true; }
 #  endif
 #endif
 
-#if (QT_VERSION < QT_VERSION_CHECK(5, 12, 5)) || (QT_VERSION == QT_VERSION_CHECK(5, 13, 0))
-#error Fulcrum requires Qt 5.12.5 (or later) or Qt 5.13.1 (or later) to be successfully built without errors.  Please use Qt 5.12.5+ or Qt 5.13.1+ to build this codebase.
+#ifdef QT_OS_WIN
+inline constexpr bool isWindows() { return true; }
+#else
+inline constexpr bool isWindows() { return false; }
 #endif

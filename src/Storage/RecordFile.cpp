@@ -298,7 +298,7 @@ namespace {
 
         const auto fileName = []{
             QTemporaryFile tmp(APPNAME "_XXXXXX.tmp");
-            tmp.open();
+            if (not tmp.open()) throw Exception("Error opening temporary file");
             auto ret = tmp.fileName();
             tmp.setAutoRemove(false); // keep file around so we can pass it to RecordFile instance
             return ret;

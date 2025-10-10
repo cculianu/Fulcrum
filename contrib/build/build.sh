@@ -134,7 +134,7 @@ fi
 cd ..  # back up, proceed to miniupnpc checkout
 
 # Checkout miniupnpc @ $tag
-MINIUPNPC_REPO=${MINIUPNPC_REPO:-https://github.com/transmission/miniupnpc.git}
+MINIUPNPC_REPO=${MINIUPNPC_REPO:-https://github.com/cculianu/miniupnpc.git}
 MINIUPNPC_PACKAGE=$(basename $MINIUPNPC_REPO .git)
 info "Checking out $MINIUPNPC_PACKAGE: $MINIUPNPC_REPO [$miniupnpc_commit] ..."
 git clone "$MINIUPNPC_REPO" "$MINIUPNPC_PACKAGE" || fail "Failed to clone $MINIUPNPC_PACKAGE"
