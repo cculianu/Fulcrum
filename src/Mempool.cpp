@@ -640,7 +640,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                     if (LIKELY(res.inserted)) {
                         // update node data -- (confirmedHeight and txNum need to be updated for confirmed spend)
                         auto & txoinfo = res.position->second;
-                        txoinfo.confirmedHeight = confirmedHeight;
+                        txoinfo.confirmedHeight.emplace(confirmedHeight);
                         txoinfo.txNum = itTxIdMap->second; /* confirmed parent txNum */
                         ++ctr;
                         ++spendsRecategorizedCount;

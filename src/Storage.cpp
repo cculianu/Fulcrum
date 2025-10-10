@@ -329,7 +329,7 @@ namespace {
             // the purpose of this holder is to keep the temporary QByteArray alive for as long as the slice itself is alive
             struct BagOfHolding {
                 QByteArray bytes;
-                operator rocksdb::Slice () const { return ToSlice(bytes); }
+                operator rocksdb::Slice () const { return rocksdb::Slice(bytes.constData(), size_t(bytes.size())); }
             } h;
             if constexpr (Scalar<Thing>) h.bytes = SerializeScalarEphemeral</*BigEndian=*/false>(thing);
             else h.bytes = Serialize(thing);
