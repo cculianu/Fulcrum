@@ -36,18 +36,11 @@ fi
 
 suffix=""
 case "$plat" in
-    "windows_qt6"|"win_qt6")
-        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
-        plat=win  # normalize to 'win'
-        docker_img_name="fulcrum-builder/qt620beta3:windows"
-        docker_cont_name="fulcrum_cont_qt_6_2_0beta3_windows_$$"
-        suffix="_qt6"
-        ;;
     "windows"|"win")
         [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
         plat=win  # normalize to 'win'
-        docker_img_name="fulcrum-builder/qt:windows"
-        docker_cont_name="fulcrum_cont_qt_windows_$$"
+        docker_img_name="fulcrum-builder/qt6:windows"
+        docker_cont_name="fulcrum_cont_qt6_windows_$$"
         ;;
     "linux"|"lin")
         [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\"; please use \"linux_ub20\" instead"

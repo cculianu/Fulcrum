@@ -1,46 +1,29 @@
 # Taken from https://github.com/fffaraz/docker-qt
 # Example usage:
-#   $ docker build --force-rm -t fulcrum-builder/qt:windows .
-#   $ docker run --rm -it -v $(pwd):/work fulcrum-builder/qt:windows
-FROM ubuntu:focal
+#   $ docker build --force-rm -t fulcrum-builder/qt6:windows .
+#   $ docker run --rm -it -v $(pwd):/work fulcrum-builder/qt6:windows
+FROM ubuntu:jammy
 LABEL maintainer="Calin Culianu <calin.culianu@gmail.com>"
-ENV DEBIAN_FRONTEND=noninteractive
 ENTRYPOINT ["/bin/bash"]
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LC_ALL=C.UTF-8
 
 RUN \
 apt -y update && \
 apt -y upgrade && \
 apt -y install build-essential iputils-ping nano \
-    autoconf automake autopoint bash bison bzip2 flex gettext \
-    git g++ gperf intltool libffi-dev libgdk-pixbuf2.0-dev \
+    autoconf automake autopoint bash bison bzip2 cmake diffutils file flex gettext \
+    git g++ gperf gtk-doc-tools intltool libffi-dev libgdk-pixbuf2.0-dev libgl-dev \
     libtool-bin libltdl-dev libssl-dev libxml-parser-perl lzip make \
-    openssl p7zip-full patch perl pkg-config python python3-mako python3-setuptools python3-packaging ruby scons \
-    sed unzip wget xz-utils \
-    g++-multilib libc6-dev-i386 && \
+    meson ninja-build openssl p7zip-full patch perl pkg-config python3 python-is-python3 python3-setuptools \
+    python3-mako ruby scons sed unzip wget xz-utils zip \
+    g++-multilib libc6-dev-i386 \
+    && \
 apt -y autoremove && \
 apt -y autoclean && \
 apt -y clean
 
-RUN \
-    cd /opt && \
-    echo "💬  \033[1;36mCloning MXE repository ...\033[0m" && \
-    git clone https://github.com/mxe/mxe.git && cd mxe && git checkout 56145fe67338e5b5bb39dd84ec3f4155b3751d2b && cd .. && \
-    echo "💬  \033[1;36mBuilding dependencies for static linking ...\033[0m" && \
-    cd /opt/mxe && \
-    echo 'override MXE_PLUGIN_DIRS += plugins/gcc13' >> settings.mk && \
-    NPROC=$(($(nproc))) && \
-    make --jobs=$NPROC JOBS=$NPROC MXE_TARGETS='x86_64-w64-mingw32.static' qtbase && \
-    ln -s /opt/mxe/usr/bin/x86_64-w64-mingw32.static-qmake-qt5 /usr/bin/qmake
-
-RUN \
-    echo "💬  \033[1;36mInstalling LibZMQ ...\033[0m" && \
-    cd /opt/mxe && \
-    NPROC=$(($(nproc))) && \
-    make --jobs=$NPROC JOBS=$NPROC MXE_TARGETS='x86_64-w64-mingw32.static' libzmq
-
-# This bit taken from Electron Cash's Windows build Dockerfile -- requires
-# Ubuntu focal (which is 20.04 LTS). If we decide to upgrade the base Ubuntu
-# tag at the top of this file, then this will just need slight modification.
 RUN \
     apt -y update && \
     apt -y upgrade && \
@@ -60,11 +43,28 @@ RUN \
         wine-stable \
         winehq-stable
 
+RUN \
+    echo "💬  \033[1;36mCloning MXE repository ...\033[0m" && \
+    mkdir -p /opt && cd /opt && \
+    git clone https://github.com/mxe/mxe.git && cd mxe && git checkout 2ffe7bb05ce08a036cc1e39bdd6962e19e0f6321 && \
+    cd /opt/mxe && \
+    echo 'override MXE_PLUGIN_DIRS += plugins/gcc15' >> settings.mk && \
+    echo "💬  \033[1;36mBuilding dependencies for static linking ...\033[0m" && \
+    cd /opt/mxe && make -j`nproc` JOBS=`nproc` MXE_TARGETS='x86_64-w64-mingw32.static' qt6-qtbase && \
+    ln -sf /opt/mxe/usr/x86_64-w64-mingw32.static/qt6/bin/qmake /usr/bin/qmake
+
+RUN \
+    echo "💬  \033[1;36mInstalling LibZMQ ...\033[0m" && \
+    cd /opt/mxe && \
+    NPROC=$(($(nproc))) && \
+    make --jobs=$NPROC JOBS=$NPROC MXE_TARGETS='x86_64-w64-mingw32.static' libzmq
+
 # Just print versions of everything at the end
 RUN \
     echo "" && echo "👍  \033[1;32mGCC Version:\033[0m" && \
     /opt/mxe/usr/bin/x86_64-w64-mingw32.static-gcc --version && \
     echo "👍  \033[1;32mQt Version:\033[0m" && \
+    ls -al /opt/mxe/usr/x86_64-w64-mingw32.static/qt6/bin && \
     qmake --version && \
     echo && echo "👍  \033[1;32mWine Version:\033[0m" && \
     wine --version && echo
