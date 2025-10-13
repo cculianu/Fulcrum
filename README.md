@@ -19,7 +19,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 
 - *Fast:* Written in 100% modern `C++20` using multi-threaded and asynchronous programming techniques.
 - *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.5.3 protocol](https://electrum-cash-protocol.readthedocs.io/en/latest/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
-- *Cross-platform:* While this codebase was mainly developed and tested on MacOS, Windows and Linux, it should theoretically work on any modern OS (such as *BSD) that has Qt5 Core and Qt5 Networking available.
+- *Cross-platform:* While this codebase was mainly developed and tested on MacOS, Windows and Linux, it should theoretically work on any modern OS (such as *BSD) that has Qt5 or Qt6 Networking available.
 - ***NEW!*** *Triple-coin:* Supports BCH, BTC and LTC.
 
 ### Requirements
@@ -35,7 +35,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
     - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, BU 1.9.1+, or Litecoin Core).
   - *Recommended hardware*: Minimum 1GB RAM, 64-bit CPU, ~40GB disk space for mainnet BCH, 133GB for BTC (as of Aug 2023). For best results, use an SSD rather than an HDD.
 - *For compiling*: 
-  - `Qt Core` & `Qt Networking` libraries `5.15.2` or above (I use `5.15.2` and `6.9.2` myself).  Qt `5.15.1` (or earlier) is not supported.
+  - `Qt Core` & `Qt Networking` libraries `5.15.2` or above (I use `6.10.0` myself).  Qt `5.15.1` (or earlier) is not supported.
   - *Optional but recommended*:
     - `libzmq 4.x` development headers and library (also known as `libzmq3-dev` on Debian/Ubuntu and `zeromq-devel` on Fedora). Fulcrum will run just fine without linking against `libzmq`, but it will run better if you do link against `libzmq` and also turn on `zmqpubhashblock` notifications in `bitcoind` (zmq is only available on: Core, BCHN, or BU 1.9.1+).
     - `libminiupnpc 2.x/3.x` development headers and library (also known as `libminiupnpc-dev` on Debuan/Ubuntu and `miniupnpc-devel` on Fedora). Fulcrum will run just fine without this library, but it is needed if you want Fulcrum to use UPnP to open up firewall ports on your router (CLI arg: `--upnp`, conf var: `upnp=true`).
@@ -62,7 +62,7 @@ You may also build from the CLI (on Linux and MacOS):
 2. `qmake` (to generate the Makefile)
 3. `make -j8`  (replace 8 here with the number of cores on your machine)
 
-**A note for Linux users**: You may have to install the Qt5 networking package separately such as `libqt5network5` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail. If you are having trouble finding the required Qt versions, you can try this link: https://launchpad.net/~beineri (for Ubuntu/Debian ppas). For best results, you may wish to also ensure you have the following installed: `pkg-config`, `libzmq` (aka `libzmq3-dev` on Debian/Ubuntu, `zeromq-devel` on Fedora), and `libminiupnpc` (aka `libminiupnpc-dev` on Debian/Ubuntu, `miniupnpc-devel` on Fedora).
+**A note for Linux users**: You may have to install the Qt5 or Qt6 networking package separately such as `libqt5network5` or `libqt6network6` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail. If you are having trouble finding the required Qt versions, you can try this link: https://launchpad.net/~beineri (for Ubuntu/Debian ppas). For best results, you may wish to also ensure you have the following installed: `pkg-config`, `libzmq` (aka `libzmq3-dev` on Debian/Ubuntu, `zeromq-devel` on Fedora), and `libminiupnpc` (aka `libminiupnpc-dev` on Debian/Ubuntu, `miniupnpc-devel` on Fedora).
 
 **A note for Windows users**: `Qt 5.15.2` (or above) with `MinGW G++ 11.x.x` (or above) is the compiler/Qt kit you should be using.  MSVC is not supported by this codebase at the present time.
 
@@ -139,10 +139,7 @@ on either a MacOS or a Linux host system.  It builds a static Qt and static rock
     `$ contrib/build/build.sh linux master`
 
 The first argument to the script is the platform to build (in this case
-`linux`). You may also specify `oldlinux` as the first argument if you wish to
-build for an older system (in which case the Docker container will use Ubuntu 16.04
-to compile, instead of the Ubuntu "latest" tag). The second argument to the
-script is a git `branch` or `tag` to build.
+`linux`). The second argument to the script is a git `branch` or `tag` to build.
 
 - *Note:* You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
 
