@@ -1,0 +1,48 @@
+diff --git a/db/blob/blob_file_meta.h b/db/blob/blob_file_meta.h
+index d7c8a1243..2e47726f8 100644
+--- a/db/blob/blob_file_meta.h
++++ b/db/blob/blob_file_meta.h
+@@ -6,6 +6,7 @@
+ #pragma once
+ 
+ #include <cassert>
++#include <cstdint>
+ #include <iosfwd>
+ #include <memory>
+ #include <string>
+diff --git a/include/rocksdb/trace_record.h b/include/rocksdb/trace_record.h
+index 8f9c3ee2f..d321f5387 100644
+--- a/include/rocksdb/trace_record.h
++++ b/include/rocksdb/trace_record.h
+@@ -5,6 +5,7 @@
+ 
+ #pragma once
+ 
++#include <cstdint>
+ #include <memory>
+ #include <string>
+ #include <vector>
+diff --git a/include/rocksdb/utilities/transaction_db_mutex.h b/include/rocksdb/utilities/transaction_db_mutex.h
+index 4ef566dad..ab984ae2a 100644
+--- a/include/rocksdb/utilities/transaction_db_mutex.h
++++ b/include/rocksdb/utilities/transaction_db_mutex.h
+@@ -5,6 +5,7 @@
+ 
+ #pragma once
+ 
++#include <cstdint>
+ #include <memory>
+ 
+ #include "rocksdb/status.h"
+diff --git a/include/rocksdb/write_batch_base.h b/include/rocksdb/write_batch_base.h
+index 3334a1292..43b186029 100644
+--- a/include/rocksdb/write_batch_base.h
++++ b/include/rocksdb/write_batch_base.h
+@@ -9,6 +9,7 @@
+ #pragma once
+ 
+ #include <cstddef>
++#include <cstdint>
+ 
+ #include "rocksdb/attribute_groups.h"
+ #include "rocksdb/rocksdb_namespace.h"

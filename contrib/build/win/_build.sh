@@ -139,7 +139,7 @@ ${ACTUAL_QMAKE} -makefile ../Fulcrum.pro ${dbg_opts} \
                      LIBS+="-L${JEMALLOC_LIBDIR}" LIBS+="-ljemalloc" \
                      INCLUDEPATH+="${JEMALLOC_INCDIR}" \
                      LIBS+="-L/opt/mxe/usr/x86_64-w64-mingw32.static/lib" LIBS+="-lzmq" LIBS+="-lsodium" \
-                     INCLUDEPATH+="/tmp/include" LIBS+="-L/tmp/lib -lminiupnpc -liphlpapi" \
+                     INCLUDEPATH+="/tmp/include" LIBS+="-L/tmp/lib" LIBS+="-lminiupnpc" LIBS+="-liphlpapi" \
                      DEFINES+="MINIUPNP_STATICLIB" \
                      INCLUDEPATH+="/opt/mxe/usr/x86_64-w64-mingw32.static/include" \
                      DEFINES+="ZMQ_STATIC" \
