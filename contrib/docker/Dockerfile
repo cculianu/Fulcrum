@@ -1,4 +1,4 @@
-FROM debian:13.1 as builder
+FROM debian:13.1 AS builder
 
 LABEL maintainer="Axel Gembe <derago@gmail.com>"
 
