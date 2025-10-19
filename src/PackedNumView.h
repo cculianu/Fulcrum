@@ -24,6 +24,7 @@
 #include "bitcoin/crypto/endian.h"
 
 #include <algorithm>
+#include <compare> // for std::strong_ordering
 #include <concepts> // for std::integral
 #include <cstddef>
 #include <cstdint>
@@ -208,11 +209,12 @@ public:
         Iterator & operator-=(ptrdiff_t offset) { pos -= offset; return *this; }
 
         bool operator==(const Iterator &o) const { return pnv == o.pnv && pos == o.pos; }
-        bool operator!=(const Iterator &o) const { return ! this->operator==(o); }
-        bool operator<(const Iterator &o) const { return pnv == o.pnv && pos < o.pos; }
-        bool operator<=(const Iterator &o) const { return this->operator<(o) || this->operator==(o); }
-        bool operator>(const Iterator &o) const { return ! this->operator<=(o); }
-        bool operator>=(const Iterator &o) const { return ! this->operator<(o); }
+        std::strong_ordering operator<=>(const Iterator &o) const {
+            if (auto pcmp = pnv <=> o.pnv; pcmp == 0)
+                return pos <=> o.pos;
+            else
+                return pcmp;
+        }
     };
 
     Iterator begin() const { return Iterator(this, 0); }
