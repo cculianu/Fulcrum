@@ -51,14 +51,21 @@ RUN \
     ./configure -opensource -confirm-license -release -static -make libs -nomake tests -nomake examples -nomake tools \
         -prefix /opt/local/qt -no-gui -no-sse2 -no-sse3 -no-ssse3 -no-sse4.1 -no-sse4.2 -no-avx -no-avx2 -no-avx512 \
         -openssl-linked -no-shared -c++std c++20 -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
-        -no-ico -no-libpng -no-libjpeg -strip -no-opengl  -no-glib -no-harfbuzz -no-sql-sqlite -no-sql-mysql \
-        -qpa linuxfb -no-feature-accessibility  -no-linuxfb -no-xcb -no-feature-sqlmodel -no-feature-itemmodeltester \
-        -no-feature-sessionmanager -no-feature-vnc -no-icu -skip qtconnectivity -qt-pcre -qt-zlib -no-tiff -no-webp \
-        -no-libinput -skip qtwebengine -skip qt3d -skip qtlocation -skip qtquick3d -no-feature-action \
-        -no-feature-animation  -no-feature-clipboard -no-feature-cups -no-feature-cursor -no-feature-desktopservices \
-        -no-feature-draganddrop -no-feature-jalalicalendar -no-feature-movie -no-feature-pdf -no-feature-picture \
-        -no-feature-valgrind -skip multimedia -skip serialbus -skip tools -skip gamepad -skip serialport -skip sensors \
-        -skip quickcontrols2 -skip speech -skip qtgraphs -skip qtquick3dphysics -no-sbom && \
+        -no-ico -no-libpng -no-libjpeg -strip -no-opengl -no-glib -no-harfbuzz -no-sql-sqlite -no-sql-mysql \
+        -qpa linuxfb -no-feature-accessibility -no-linuxfb -no-xcb -no-feature-sqlmodel -no-feature-itemmodeltester \
+        -no-feature-sessionmanager -no-feature-vnc -no-icu -qt-pcre -system-zlib -no-tiff -no-webp -no-libinput \
+        -no-feature-action -no-feature-animation -no-feature-clipboard -no-feature-cups -no-feature-cursor \
+        -no-feature-desktopservices -no-feature-draganddrop -no-feature-jalalicalendar -no-feature-movie \
+        -no-feature-pdf -no-feature-picture -no-feature-valgrind -skip multimedia -skip serialbus -skip tools \
+        -skip gamepad -skip serialport -skip sensors -skip quickcontrols2 -skip speech -no-sbom -no-jemalloc \
+        -no-gtk -skip qt3d -skip qt5compat -skip qtactiveqt -skip qtcharts -skip qtcoap -skip qtconnectivity \
+        -skip qtdatavis3d -skip qtdeclarative -skip qtdoc -skip qtgraphs -skip qtgrpc -skip qthttpserver \
+        -skip qtimageformats -skip qtlanguageserver -skip qtlocation -skip qtlottie -skip qtmqtt -skip qtmultimedia \
+        -skip qtnetworkauth -skip qtopcua -skip qtpositioning -skip qtquick3d -skip qtquick3dphysics \
+        -skip qtquickeffectmaker -skip qtquicktimeline -skip qtremoteobjects -skip qtscxml -skip qtsensors \
+        -skip qtserialbus -skip qtserialport -skip qtshadertools -skip qtspeech -skip qtsvg -skip qttools \
+        -skip qttranslations -skip qtvirtualkeyboard -skip qtwayland -skip qtwebchannel -skip qtwebengine \
+        -skip qtwebsockets -skip qtwebview -no-feature-xml -no-feature-testlib -no-feature-sql -no-feature-concurrent && \
     echo "" && echo "💬  \033[1;36mCompiling Qt ...\033[0m" && \
     cmake --build . --parallel && \
     echo "" && echo "💬  \033[1;36mInstalling Qt ...\033[0m" && \
