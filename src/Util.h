@@ -854,7 +854,8 @@ namespace Util {
         //! writeStdErr() declared later in this file.
         template <std::size_t N = 255>
         struct SBuf {
-            static_assert (N < std::size_t(std::numeric_limits<long>::max())); // ensure no signed overflow
+            using SSizeT = std::make_signed_t<std::size_t>; // C++ does not have the unix-specific ssize_t always
+            static_assert(N < std::size_t(std::numeric_limits<SSizeT>::max())); // ensure no signed overflow
             static constexpr std::size_t MaxLen = N;
             std::size_t len = 0;
             std::array<char, MaxLen + 1> strBuf;
@@ -874,14 +875,14 @@ namespace Util {
             // append a string_view to the buffer
             SBuf & append(const std::string_view &sv) noexcept {
                 auto *const s = sv.data();
-                long slen = long(sv.length());
-                if (slen <= 0) return *this;
-                if (slen + len > MaxLen)
-                    slen = long(MaxLen) - len;
-                if (slen <= 0) return *this;
+                SSizeT slen = static_cast<SSizeT>(sv.length());
+                if (slen <= 0) return *this; // length 0, or outside positive signed range .. :/
+                if (static_cast<std::size_t>(slen) + len > MaxLen) // string doesn't fit, figure out truncated length
+                    slen = static_cast<SSizeT>(MaxLen) - static_cast<SSizeT>(len);
+                if (slen <= 0) return *this; // out of signed range or no space left, give up.
                 std::memcpy(strBuf.data() + len, s, slen);
-                len += slen;
-                strBuf[len] = 0;
+                len += static_cast<std::size_t>(slen);
+                strBuf[len] = 0; // ensure nul termination
                 return *this;
             }
             // append a single character
@@ -918,11 +919,11 @@ namespace Util {
                     n /= 10;
                 } while (n); /* <-- no need to check if looping past end of tmpBuf; 64 chars is enough for at least 128 bit; see above static_assert */
                 if (neg) tmpBuf[tmpLen++] = '-'; // append negative at end
-                const long nBytes = std::max(std::min(long(MaxLen) - long(len), long(tmpLen)), 0L);
+                const SSizeT nBytes = std::max<SSizeT>(std::min(SSizeT(MaxLen) - SSizeT(len), SSizeT(tmpLen)), 0);
                 const auto rbegin = std::make_reverse_iterator(tmpBuf + tmpLen),
-                           rend   = std::make_reverse_iterator(tmpBuf + (long(tmpLen) - nBytes)); // handle truncation in cases where it doesn't fit
+                           rend   = std::make_reverse_iterator(tmpBuf + (SSizeT(tmpLen) - nBytes)); // handle truncation in cases where it doesn't fit
                 std::copy(rbegin, rend, strBuf.begin() + len); // append in reverse to strBuf
-                len += nBytes;
+                len += static_cast<std::size_t>(nBytes);
                 strBuf[len] = 0; // terminating nul (there is always room for this char)
                 return *this;
             }

@@ -79,9 +79,11 @@ public:
     std::pair<Table &, ExclusiveLockGuard> getMutableTable() { return {table, ExclusiveLockGuard{mut}}; } // read/write access
 
 
-    /// Thread-safe.  Gets an existing shared object, or atomically creates a new one if one does not
-    /// already exist. (In the case of a new connection for this client).  The object's table entry will be
-    /// removed automatically by its deleter when the last instance of the returned std::shared_ptr is dereferenced.
+    /// Thread-safe.  Gets an existing shared object, or atomically creates a new one if one does not already exist.
+    /// The object's table entry will be removed automatically by its deleter when the last instance of the returned
+    /// std::shared_ptr's lifetime ends.
+    ///
+    /// Example usage: Per-IP data that dies with the last client from a particular IP disconnects from a server.
     DataRef getOrCreate(const Key &key, bool createIfMissing)
     {
         DataRef ret;
@@ -95,7 +97,7 @@ public:
         };
         const auto debugPrtFoundExisting = MkDebugPrtFunc(key, ret, this);
 
-        // first, take the shared lock and see if we can find the per-ip data for addr, as a performance optimization.
+        // first, take the shared lock and see if we can find the item that way, as a performance optimization.
         {
             SharedLockGuard g(mut);
             if (auto it = table.find(key); it != table.end())
