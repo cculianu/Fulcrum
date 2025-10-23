@@ -813,7 +813,8 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
                                            const QString &method,
                                            const QVariantList & params,
                                            const BitcoinDSuccessFunc & successFunc,
-                                           const BitcoinDErrorFunc & errorFunc)
+                                           const BitcoinDErrorFunc & errorFunc,
+                                           std::optional<int> useCacheIfNotOlderThan)
 {
     if (UNLIKELY(QThread::currentThread() != c->thread())) {
         // Paranoia, in case I or a future programmer forgets this rule.
@@ -890,7 +891,11 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
             }
         },
         // use default function on failure, sends json rpc error "internal error: <message>"
-        defaultBDFailFunc(c, batchId, reqId)
+        defaultBDFailFunc(c, batchId, reqId),
+        // timeout
+        BitcoinDMgr::kDefaultTimeoutMS,
+        // optional response caching control
+        useCacheIfNotOlderThan
     );
 }
 
@@ -2391,6 +2396,14 @@ void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId
     }
     emit c->sendResult(batchId, m.id, result);
 }
+
+void Server::rpc_mempool_get_info(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    constexpr int kMempoolInfoStaleThreshMS = 5'000; // if older than 5 secs, refresh
+    generic_async_to_bitcoind(c, batchId, m.id, "getmempoolinfo", QVariantList{}, BitcoinDSuccessFunc{}, BitcoinDErrorFunc{},
+                              kMempoolInfoStaleThreshMS);
+}
+
 void Server::rpc_daemon_passthrough(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     Options::Subnet subnet;
@@ -2487,6 +2500,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"daemon.passthrough",                true,               false,    PR{0,0}, RPC::KeySet{{"method"}}, true /* allow unknown kwargs, since "params" is optional */ }, MP(rpc_daemon_passthrough) },
     { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },
+    { {"mempool.get_info",                  true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_info) },
 };
 #undef MP
 #undef PR

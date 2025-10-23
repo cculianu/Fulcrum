@@ -287,7 +287,8 @@ protected:
                                    const QString &method, ///< bitcoind method to invoke
                                    const QVariantList &params, ///< params for bitcoind method
                                    const BitcoinDSuccessFunc & successFunc,
-                                   const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
+                                   const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc(),
+                                   std::optional<int> useCacheIfNotOlderThan = std::nullopt);
 
     /// Subclasses may set this pointer if they wish the generic_do_async function above to use a private/custom
     /// threadpool. Otherwise the app-global ::AppThreadPool()  will be used for generic_do_async().
@@ -431,6 +432,7 @@ private:
     void rpc_blockchain_utxo_get_info(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // mempool
     void rpc_mempool_get_fee_histogram(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_mempool_get_info(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.6.0
     // daemon
     void rpc_daemon_passthrough(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
 

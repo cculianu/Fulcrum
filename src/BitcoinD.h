@@ -33,6 +33,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <vector>
@@ -107,7 +108,7 @@ public:
     /// NOTE2: calling this method while this BitcoinDManager is stopped or about to be stopped is not supported.
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF(),
-                       int timeout = kDefaultTimeoutMS);
+                       int timeout = kDefaultTimeoutMS, std::optional<int> cachedResultOkIfNotOlderThan = std::nullopt);
 
     /// Thread-safe.  Returns a copy of the BitcoinDInfo object.  This object is refreshed each time we
     /// reconnect to BitcoinD.  This is called by ServerBase in various places.
@@ -237,6 +238,32 @@ private:
 
     /// dsproof rpc setter -- called internally by probeBitcoinDHasDSProofRPC
     void setHasDSProofRPC(bool);
+
+    /// Mechanism to cache the last-known response from bitcoind's RPC calls (used for RPC calls such as getmempoolinfo that don't need to be super-up-to-date)
+    struct CachedResult {
+        qint64 timeStamp{}; ///< The time in msec that this was last cached (as returned by Util::getTime())
+        qint64 maxAge{}; ///< The maximum age that is permitted for this cached entry, after which time it may be deleted
+        QVariant result; ///< The last good result from a bitcoind RPC call
+        CachedResult() noexcept = default;
+        /// Returns the "age" of this cached value in msec
+        qint64 ageMSec() const;
+    };
+
+    mutable std::shared_mutex cachedResultsLock;
+    QHash<QString, CachedResult> cachedResultsTable; ///< guarded-by cachedResultsLock
+
+    /// Thread-safe.  Returns a copy of the CachedResult object for method, if found, or std::nullopt otherwise.
+    /// Note that all cached results are cleared each time we reconnect to BitcoinD.
+    std::optional<CachedResult> getCachedResult(const QString &method) const;
+    /// Thread-safe, caches a result, updating the internal timestamp to current.
+    void updateCachedResult(const QString &method, qint64 maxAge, QVariant result);
+    /// Thread-safe, clears the cached results table
+    void clearCachedResultsTable();
+
+    static constexpr auto kExpireOldCachedResultsTimer = "+ExpireZombieCachedResults";
+    static constexpr auto kExpireOldCachedResultsPolltimeMS = 60'000;
+    /// Thread-safe, called from a timer. Deletes old entries from table.
+    void expireOldCachedResults();
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
