@@ -2413,8 +2413,19 @@ void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId
 void Server::rpc_mempool_get_info(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     constexpr int kMempoolInfoStaleThreshMS = 5'000; // if older than 5 secs, refresh
-    generic_async_to_bitcoind(c, batchId, m.id, "getmempoolinfo", QVariantList{}, BitcoinDSuccessFunc{}, BitcoinDErrorFunc{},
-                              kMempoolInfoStaleThreshMS);
+    generic_async_to_bitcoind(c, batchId, m.id, "getmempoolinfo", QVariantList{},
+        [](const RPC::Message &response){
+            // to preserve privacy, only grab the following keys, omitting size, bytes, etc
+            constexpr const char * desiredKeys[] = { "mempoolminfee", "minrelaytxfee", "incrementalrelayfee",
+                                                     "unbroadcastcount", "fullrbf" };
+            QVariantMap m = response.result().toMap(), ret;
+            for (const auto & key : desiredKeys)
+                if (m.contains(key)) ret[key] = m.value(key);
+            return ret;
+        },
+        BitcoinDErrorFunc{},
+        kMempoolInfoStaleThreshMS
+    );
 }
 
 void Server::rpc_daemon_passthrough(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
