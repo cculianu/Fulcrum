@@ -2412,7 +2412,7 @@ void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId
 
 void Server::rpc_mempool_get_info(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    constexpr int kMempoolInfoStaleThreshMS = 5'000; // if older than 5 secs, refresh
+    constexpr int kMempoolInfoStaleThreshMS = 250; // if older than 250 msecs, refresh (this rate-limits spammers)
     generic_async_to_bitcoind(c, batchId, m.id, "getmempoolinfo", QVariantList{},
         [](const RPC::Message &response){
             // to preserve privacy, only grab the following keys, omitting size, bytes, etc
