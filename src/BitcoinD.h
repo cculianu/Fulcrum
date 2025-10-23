@@ -50,7 +50,12 @@ struct BitcoinDInfo {
     double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
     QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
     bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
-    bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
+    struct EstimateFeeInfo {
+        bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
+        bool hasEstimateSmartFee = false; ///< true if remote bitcoind supports estimatesmartfee. (Bitcoin Core >= 0.15.0, Litecoin >= 0.15.0)
+        bool isTwoArgEstimateSmartFee = false; ///< if true, estimatesmartfee has an optional second parameter "mode" (Bitcoin Core >= 0.16.0, Litecoin >= 0.15.0)
+    };
+    EstimateFeeInfo estimateFeeInfo;
     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
     bool isLTC = false; ///< true if we are actually connected to /LitecoinCore.. node (Litecoin)
     bool isBU = false; ///< true if subversion string starts with "/BCH Unlimited:"
@@ -123,12 +128,6 @@ public:
     /// in the db. See also: Storage::genesisHash().
     BlockHash getBitcoinDGenesisHash() const;
 
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isZeroArgEstimateFee
-    bool isZeroArgEstimateFee() const;
-
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns true iff getBitcoinDInfo().isCore || getBitcoinDInfo().isLTC.
-    bool isCoreLike() const;
-
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().version
     Version getBitcoinDVersion() const;
 
@@ -137,6 +136,9 @@ public:
 
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().hasDSProofRPC
     bool hasDSProofRPC() const;
+
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().estimateFeeInfo
+    BitcoinDInfo::EstimateFeeInfo getEstimateFeeInfo() const;
 
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)

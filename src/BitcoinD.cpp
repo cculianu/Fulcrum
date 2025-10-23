@@ -298,7 +298,10 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                             return true;
                     return false;
                 };
-                bitcoinDInfo.isZeroArgEstimateFee = !res.isCore && !res.isLTC && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                auto & efi = bitcoinDInfo.estimateFeeInfo;
+                efi.isZeroArgEstimateFee = !res.isCore && !res.isLTC && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                efi.hasEstimateSmartFee = (res.isCore || res.isLTC) && bitcoinDInfo.version >= Version{0, 15, 0};
+                efi.isTwoArgEstimateSmartFee = (res.isCore && bitcoinDInfo.version >= Version{0, 16, 0}) || (res.isLTC && bitcoinDInfo.version >= Version{0, 15, 0});
                 // Implementations known to lack `getzmqnotifications`:
                 // - bchd (all versions)
                 // - BU before version 1.9.1.0
@@ -540,18 +543,6 @@ BitcoinDInfo BitcoinDMgr::getBitcoinDInfo() const
 
 void BitcoinDMgr::requestBitcoinDInfoRefresh() { refreshBitcoinDNetworkInfo(); }
 
-bool BitcoinDMgr::isZeroArgEstimateFee() const
-{
-    std::shared_lock g(bitcoinDInfoLock);
-    return bitcoinDInfo.isZeroArgEstimateFee;
-}
-
-bool BitcoinDMgr::isCoreLike() const
-{
-    std::shared_lock g(bitcoinDInfoLock);
-    return bitcoinDInfo.isCore || bitcoinDInfo.isLTC;
-}
-
 Version BitcoinDMgr::getBitcoinDVersion() const
 {
     std::shared_lock g(bitcoinDInfoLock);
@@ -588,6 +579,12 @@ bool BitcoinDMgr::hasDSProofRPC() const
 {
     std::shared_lock g(bitcoinDInfoLock);
     return bitcoinDInfo.hasDSProofRPC;
+}
+
+BitcoinDInfo::EstimateFeeInfo BitcoinDMgr::getEstimateFeeInfo() const
+{
+    std::shared_lock g(bitcoinDInfoLock);
+    return bitcoinDInfo.estimateFeeInfo;
 }
 
 void BitcoinDMgr::setHasDSProofRPC(bool b)
@@ -1067,7 +1064,9 @@ QVariantMap BitcoinDInfo::toVariantMap() const
     ret["subversion"] = subversion;
     ret["warnings"] = warnings;
     ret["relayfee"] = relayFee;
-    ret["isZeroArgEstimateFee"] = isZeroArgEstimateFee;
+    ret["isZeroArgEstimateFee"] = estimateFeeInfo.isZeroArgEstimateFee;
+    ret["hasEstimateSmartFee"] = estimateFeeInfo.hasEstimateSmartFee;
+    ret["isTwoArgEstimateSmartFee"] = estimateFeeInfo.isTwoArgEstimateSmartFee;
     ret["isBchd"] = isBchd;
     ret["isCore"] = isCore;
     ret["lacksGetZmqNotifications"] = lacksGetZmqNotifications;

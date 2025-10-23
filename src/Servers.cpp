@@ -1341,16 +1341,30 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::BatchId batchId, c
     bool ok;
     int n = l.front().toInt(&ok);
     if (!ok || n < 0)
-        throw RPCError(QString("%1 parameter should be a single non-negative integer").arg(m.method));
+        throw RPCError(QString("%1 first parameter should be a non-negative integer").arg(m.method));
+    std::optional<QString> mode;
+    if (l.size() >= 2) {
+        // A second optional "mode" argument (string)
+        const auto &var = l.at(1);
+        if (!Compat::IsMetaType(var, QMetaType::Type::QString) && !Compat::IsMetaType(var, QMetaType::Type::QByteArray))
+            throw RPCError(QString("%1 second parameter should be a string").arg(m.method));
+        mode = var.toString();
+    }
 
     QVariantList params;
+    const auto estimateFeeInfo = bitcoindmgr->getEstimateFeeInfo();
     // Flowee, BU, early ABC, bchd have a 1-arg estimate fee, newer ABC & BCHN -> 0 arg
-    if (!bitcoindmgr->isZeroArgEstimateFee())
+    if (!estimateFeeInfo.isZeroArgEstimateFee)
         params.push_back(unsigned(n));
 
-    if ((bitcoindmgr->isCoreLike())
-            && bitcoindmgr->getBitcoinDVersion() >= Version{0,17,0}) {
+    if (estimateFeeInfo.hasEstimateSmartFee) {
         // Bitcoin Core removed the "estimatefee" RPC method entirely in version 0.17.0, in favor of "estimatesmartfee"
+        // (available starting in 0.15.0)
+        if (estimateFeeInfo.isTwoArgEstimateSmartFee && mode) {
+            // Core >= 0.16.0 supports a second optional "mode" argument (string), we force it to upper-case since
+            // very old Core versions wanted uppercase only here.
+            params.push_back(mode->toUpper());
+        }
         generic_async_to_bitcoind(c, batchId, m.id, "estimatesmartfee", params, [](const RPC::Message &response){
             // We don't validate what bitcoind returns. Sometimes if it has not enough information, it may
             // return no "feerate" but instead return an "errors" entry in the dict. This is fine.
@@ -1924,8 +1938,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
     const QByteArray txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)).left(16) : QByteArrayLiteral("xx"));
     // no need to validate hex here -- bitcoind does validation for us!
     QVariantList params { rawtxhex } ;
-    if (isBTC()
-            && bitcoindmgr->getBitcoinDVersion() >= Version{0,25,0}) {
+    if (isBTC() && bitcoindmgr->getBitcoinDVersion() >= Version{0,25,0}) {
         // bitcoin core 25.0+ requires specifying maxburnamount in sendrawtransaction call
         // which also requires first sending maxfeerate, set to 0.1btc by default in core
         params.append(0.1);
@@ -2460,7 +2473,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          MP(rpc_blockchain_block_header) },
     { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          MP(rpc_blockchain_block_headers) },
-    { {"blockchain.estimatefee",            true,               false,    PR{1,1},                    },          MP(rpc_blockchain_estimatefee) },
+    { {"blockchain.estimatefee",            true,               false,    PR{1,2},                    },          MP(rpc_blockchain_estimatefee) },
     { {"blockchain.headers.get_tip",        true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_get_tip) },
     { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_subscribe) },
     { {"blockchain.headers.unsubscribe",    true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_unsubscribe) },
