@@ -381,6 +381,11 @@ namespace {
         }
         return ret;
     }
+
+    bool IsMetaTypeStringLike(const QVariant & var) {
+        return Compat::IsMetaType(var, QMetaType::Type::QString) || Compat::IsMetaType(var, QMetaType::Type::QByteArray);
+    }
+
 } // namespace
 
 ServerBase::ServerBase(SrvMgr *sm,
@@ -416,7 +421,7 @@ QVariant ServerBase::stats() const
         map["isSubscribedToHeaders"] = bool(client->headerSubConnection);
         map["nSubscriptions"] = client->nShSubs.load();
         map["nTxSent"] = client->info.nTxSent;
-        map["nTxBytesSent"] = client->info.nTxBytesSent;
+        map["nTxBytesSent"] = qulonglong(client->info.nTxBytesSent);
         map["nTxBroadcastErrors"] = client->info.nTxBroadcastErrors;
         // data from the per-ip structure
         map["perIPData"] = [client]{
@@ -730,8 +735,8 @@ void ServerBase::onPeerError(IdMixin::Id clientId, const QString &what)
         // and finally log it
         Debug() << "onPeerError, client " << clientId << " error: " << what.left(num);
     }
-    if (Client *c = getClient(clientId); c) {
-        if (const auto diff = ++c->info.errCt - c->info.nRequestsRcv; diff >= kMaxErrorCount) {
+    if (Client *c = getClient(clientId)) {
+        if (const auto diff = qlonglong(++c->info.errCt) - qlonglong(c->info.nRequestsRcv); diff >= kMaxErrorCount) {
             Warning() << "Excessive errors (" << diff << ") for: " << c->prettyName() << ", disconnecting";
             killClient(c);
             return;
@@ -1948,6 +1953,15 @@ void Server::LogFilter::Broadcast::onNewBlock()
         success.reset();
 }
 
+namespace {
+    void appendMaxBurnAmountForBTCToParams(QVariantList &params) {
+        // bitcoin core 25.0+ requires specifying maxburnamount in sendrawtransaction call
+        // which also requires first sending maxfeerate, set to 0.1 BTC (default in Core)
+        params.append(0.1);
+        // set maxburnrate to max BTC supply to preserve pre-25.0 functionality
+        params.append(21'000'000);
+    }
+} // namespace
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
@@ -1959,25 +1973,21 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
     const QByteArray txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)).left(16) : QByteArrayLiteral("xx"));
     // no need to validate hex here -- bitcoind does validation for us!
     QVariantList params { rawtxhex } ;
-    if (bitcoindmgr->getRpcSupportInfo().sendRawTransactionRequiresMaxBurnAmount) {
+    if (bitcoindmgr->getRpcSupportInfo().sendRawTransactionRequiresMaxBurnAmount)
         // bitcoin core 25.0+ requires specifying maxburnamount in sendrawtransaction call
-        // which also requires first sending maxfeerate, set to 0.1btc by default in core
-        params.append(0.1);
-        // set maxburnrate to max btc supply to preserve pre-25.0 functionality
-        params.append(21000000);
-    }
+        appendMaxBurnAmountForBTCToParams(params);
     generic_async_to_bitcoind(c, batchId, m.id, "sendrawtransaction", params,
         // print to log, echo bitcoind's reply to client
-        [size=rawtxhex.length()/2, c, this, txkey](const RPC::Message & reply){
+        [size=size_t(rawtxhex.length()/2), c, this, txkey](const RPC::Message & reply){
             QVariant ret = reply.result();
             ++c->info.nTxSent;
-            c->info.nTxBytesSent += unsigned(size);
-            emit broadcastTxSuccess(unsigned(size));
+            c->info.nTxBytesSent += size;
+            emit broadcastTxSuccess(1u, size);
             QByteArray logLine;
             {
                 QTextStream ts{&logLine, QIODevice::WriteOnly};
                 ts << "Broadcast tx for client " << c->id;
-                if (!options->anonLogs) ts << ", size: " << size << " bytes, response: " << ret.toString();
+                if (!options->anonLogs) ts << ", size: " << qulonglong(size) << " bytes, response: " << ret.toString();
             }
             logFilter->broadcast(true, logLine, txkey);
             // Next, check if client is old and has the phishing exploit:
@@ -2041,6 +2051,112 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
         }
     );
     // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
+}
+void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    if (not bitcoindmgr->getRpcSupportInfo().hasSubmitPackageRPC)
+        // This is not supported on anything but Bitcoin Core 28.0.0
+        throw RPCError("blockchain.transaction.broadcast_package is only available on BTC running Core v28.0.0 or above",
+                       RPC::ErrorCodes::Code_MethodNotFound);
+    const QVariantList paramsIn = m.paramsList();
+    const QVariantList txnsIn = paramsIn[0].toList();
+    QVariantList txns;
+    txns.reserve(txnsIn.size());
+    const size_t maxPackageBytes = std::max<size_t>(1000 * 1000, options->maxBuffer.load()); // limit package size to max 1MB or maxBuffer, whichever is larger
+    size_t packageSizeBytes = 0u, packageNTx = 0u;
+    bool oversized = false;
+    // -- Note we need the broadcast_key for broadcast fail filtering -- the key is a single sha256 of the first tx's
+    // -- bytes + packageNTx + packageSizeBytes, but just the first 16 bytes of this hash are taken. Keeping the key
+    // -- small is essential to save cycles.
+    QByteArray broadcast_key;
+    auto validateAndPushTxn = [&](const QVariant &vartx) {
+        if (!IsMetaTypeStringLike(vartx)) return false;
+        const QByteArray strhextx = vartx.toString().toUtf8().trimmed();
+        if (oversized || (oversized = strhextx.size() > kMaxTxHex) || strhextx.isEmpty()) return false; // txn is oversized
+        const size_t txnSize = strhextx.size() / 2;
+        if (!txnSize || txnSize % 2) return false; // bad size
+        if (oversized || (oversized = (packageSizeBytes += txnSize) > maxPackageBytes)) return false; // total size is oversized
+        if (!packageNTx)
+            broadcast_key = Util::ParseHexFast(strhextx); // remember first tx
+        txns.push_back(strhextx); // shallow copy
+        ++packageNTx;
+        return true;
+    };
+    // validate txn arg
+    if (txnsIn.isEmpty() || !std::all_of(txnsIn.begin(), txnsIn.end(), validateAndPushTxn))
+        throw RPCError(QString("Invalid raw_txs argument; ") + QString(!oversized ? "expected non-empty list of hex-encoded strings"
+                                                                                  : "oversized"));
+    // validate optional verbose arg, if present
+    bool verbose = false;
+    if (paramsIn.size() >= 2) { // parse optional verbose arg
+        const auto [verbArg, verbArgOk] = parseBoolSemiLooselyButNotTooLoosely(paramsIn[1]);
+        if (!verbArgOk)
+            throw RPCError("Invalid verbose argument; expected boolean");
+        verbose = verbArg;
+    }
+    // Calculate broadcast_key = Hash(firstTxBytes + packageNTx + packageSizeBytes)[:16]
+    broadcast_key.reserve(broadcast_key.size() + sizeof(packageNTx) + sizeof(packageSizeBytes));
+    broadcast_key.append(reinterpret_cast<const char *>(&packageNTx), QByteArray::size_type(sizeof(packageNTx)));
+    broadcast_key.append(reinterpret_cast<const char *>(&packageSizeBytes), QByteArray::size_type(sizeof(packageSizeBytes)));
+    broadcast_key = BTC::HashOnce(broadcast_key).left(16);
+
+    QVariantList params;
+    params.reserve(3);
+    params.append(txns);
+    appendMaxBurnAmountForBTCToParams(params);
+    generic_async_to_bitcoind(c, batchId, m.id, "submitpackage", params,
+        // print to log, echo bitcoind's reply to client iff verbose==true, otherwise prepare reply based on bitcond reply
+        [size = packageSizeBytes, ntx = packageNTx, c, this, broadcast_key, verbose](const RPC::Message &reply) {
+            const QVariantMap result = reply.result().toMap();
+            const QString packageMsg = result.value("package_msg").toString();
+            c->info.nTxSent += ntx;
+            c->info.nTxBytesSent += size;
+            emit broadcastTxSuccess(ntx, size);
+            QByteArray logLine;
+            {
+                QTextStream ts{&logLine, QIODevice::WriteOnly};
+                ts << "Broadcast package for client " << c->id;
+                if (!options->anonLogs)
+                    ts << ", size: " << size << " bytes, nTx: " << ntx << ", response: " << packageMsg;
+            }
+            logFilter->broadcast(true, logLine, broadcast_key);
+            if (verbose)
+                return QVariant{result}; // verbose mode, just return the bitcoind result object verbatim
+            // otherwise, non-verbose mode extract results from the "tx-results" dictionary
+            const QVariantMap txResultsMap = result.value("tx-results").toMap();
+            QVariantMap ret = {{"success", 0 == packageMsg.compare("success", Qt::CaseInsensitive)}};
+            QVariantList errors;
+            bool warnIsBad = txResultsMap.isEmpty();
+            for (const QVariant &item : txResultsMap) {
+                const QVariantMap m = item.toMap();
+                if (m.isEmpty() || !Compat::IsMetaType(item, QMetaType::QVariantMap)) [[unlikely]]
+                    warnIsBad = true;
+                else if (auto it = m.find("error"); it != m.end()) {
+                    const QVariantMap err = {{"txid", m.value("txid", "???")}, {"error", it.value().toString()}};
+                    errors.push_back(err);
+                }
+            }
+            if (warnIsBad) [[unlikely]] {
+                Warning() << "Unexpected result format from bitcoind `submitpackage` RPC. Report this issue to the " APPNAME " developers!";
+                DebugM("Result from bitcoind was: ", Json::toUtf8(reply.result(), true));
+            }
+            if (!errors.isEmpty())
+                ret["errors"] = errors;
+            return QVariant{ret};
+        },
+        // error func, throw an RPCError that's formatted in a particular way
+        [c, this, broadcast_key](const RPC::Message &errResponse) {
+            ++c->info.nTxBroadcastErrors;
+            const auto errorMessage = errResponse.errorMessage();
+            {
+                // This "logFilter" mechanism was added in Fulcrum 1.2.5 to suppress repeated broadcast fail spam
+                QByteArray logLine;
+                QTextStream{&logLine, QIODevice::WriteOnly} << "Broadcast package fail for client " << c->id << ": " << errorMessage.left(120);
+                logFilter->broadcast(false, logLine, broadcast_key);
+            }
+            throw RPCError(QString("the transaction was rejected by network rules.\n\n%1\n").arg(errorMessage),
+                           RPC::Code_App_BadRequest);
+        });
 }
 void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -2461,7 +2577,7 @@ void Server::rpc_daemon_passthrough(Client *c, const RPC::BatchId batchId, const
     QVariantMap pm;
     QVariant method, params;
     if (!m.isParamsMap() || (pm = m.paramsMap()).size() < 1
-        || (!Compat::IsMetaType(method = pm.value("method"), QMetaType::QString) && !Compat::IsMetaType(method, QMetaType::QByteArray))
+        || !IsMetaTypeStringLike(method = pm.value("method"))
         || (!Compat::IsMetaType(params = pm.value("params"), QMetaType::QVariantList) && !params.isNull()))
         throw RPCError("Expected a dictionary of the form: { \"method\": \"string\", \"params\": [...] }");
     const QString methodStr = method.toString();
@@ -2521,6 +2637,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_unsubscribe) },
 
     { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_broadcast) },
+    { {"blockchain.transaction.broadcast_package",  true,       false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_broadcast_package) },
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
     { {"blockchain.transaction.get_confirmed_blockhash", true,  false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get_confirmed_blockhash) },
     { {"blockchain.transaction.get_height", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_get_height) },
