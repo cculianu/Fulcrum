@@ -312,8 +312,9 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 // Bitcoin Core 25.0+ requires specifying `maxburnamount` in the `sendrawtransaction` RPC
                 // (which, due to bitcoin core weirdness in how it encodes the version int, maps to Version{0, 25, 0}
                 rsi.sendRawTransactionRequiresMaxBurnAmount = res.isCore && bitcoinDInfo.version >= Version{0, 25, 0};
-                // The `submitpackage` RPC is only present and usable by us on Bitcoin Core >= 28.0.0
-                rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 28, 0};
+                // The `submitpackage` RPC is only present in a form usable by us on Bitcoin Core >= 27.0.0
+                rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 27, 0};
+                rsi.submitPackageRPCSupportsMaxBurnAmount = rsi.hasSubmitPackageRPC && bitcoinDInfo.version >= Version{0, 28, 0};
             } // end lock scope
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             BTC::Coin coin = BTC::Coin::BCH; // default BCH if unknown (not segwit)
@@ -1069,6 +1070,7 @@ QVariantMap BitcoinDInfo::toVariantMap() const
     ret["hasDSProofRPC"] = rpcSupportInfo.hasDSProofRPC;
     ret["sendRawTransactionRequiresMaxBurnAmount"] = rpcSupportInfo.sendRawTransactionRequiresMaxBurnAmount;
     ret["hasSubmitPackageRPC"] = rpcSupportInfo.hasSubmitPackageRPC;
+    ret["submitPackageRPCSupportsMaxBurnAmount"] = rpcSupportInfo.submitPackageRPCSupportsMaxBurnAmount;
     ret["isCore"] = isCore;
     ret["isLTC"] = isLTC;
     ret["isBU"] = isBU;
