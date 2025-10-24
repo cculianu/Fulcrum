@@ -56,8 +56,7 @@ struct BitcoinDInfo {
         bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
         bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
         bool sendRawTransactionRequiresMaxBurnAmount = false; ///< true if the `sendrawtransaction` RPC requires 2 extra args. Bitcoin Core >= 25.0.0 only.
-        bool hasSubmitPackageRPC = false; ///< true if the `submitpackage` RPC method exists and is what we expect. Bitcoin Core >= 27.0.0 only.
-        bool submitPackageRPCSupportsMaxBurnAmount = false; ///< true if hasSubmitPackageRPC and Bitcoin Core >= 28.0.0.
+        bool hasSubmitPackageRPC = false; ///< true if the `submitpackage` RPC method exists and is what we expect. Bitcoin Core >= 28.0.0 only.
     };
     RpcSupportInfo rpcSupportInfo;
     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
