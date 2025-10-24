@@ -440,7 +440,7 @@ QVariant ServerBase::stats() const
         map.remove("lastSocketError");
         map.remove("nUnansweredRequests");
         map.remove("nRequestsSent");
-        clientList.append(QVariantMap({{name, map}}));
+        clientList.push_back(QVariantMap({{name, map}}));
     }
     m["clients"] = clientList;
     return QVariantMap{{prettyName(), m}};
@@ -1963,9 +1963,9 @@ namespace {
     void appendMaxBurnAmountForBTCToParams(QVariantList &params) {
         // bitcoin core 25.0+ requires specifying maxburnamount in sendrawtransaction call
         // which also requires first sending maxfeerate, set to 0.1 BTC (default in Core)
-        params.append(0.1);
+        params.push_back(0.1);
         // set maxburnrate to max BTC supply to preserve pre-25.0 functionality
-        params.append(21'000'000);
+        params.push_back(21'000'000);
     }
 } // namespace
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
@@ -2079,7 +2079,7 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
         if (!IsMetaTypeStringLike(vartx)) return false;
         const QByteArray strhextx = vartx.toString().toUtf8().trimmed();
         const size_t hexSize = strhextx.size();
-        if (oversized || (oversized = hexSize > kMaxTxHex) || strhextx.isEmpty()) return false; // txn is oversized
+        if (oversized || (oversized = hexSize > kMaxTxHex) || strhextx.isEmpty()) return false; // bad txn size
         const size_t txnSize = hexSize / 2;
         if (!txnSize || hexSize % 2) return false; // bad size
         if (oversized || (oversized = (packageSizeBytes += txnSize) > maxPackageBytes)) return false; // total size is oversized
@@ -2109,7 +2109,7 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
 
     QVariantList params;
     params.reserve(3);
-    params.append(txns);
+    params.push_back(txns);
     appendMaxBurnAmountForBTCToParams(params);
     generic_async_to_bitcoind(c, batchId, m.id, "submitpackage", params,
         // print to log, echo bitcoind's reply to client iff verbose==true, otherwise prepare reply based on bitcond reply
@@ -2396,7 +2396,7 @@ void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::Batch
         QVariantList ret;
         ret.reserve(allDescendants.size());
         for (const auto &txid : allDescendants)
-            ret.append(Util::ToHexFast(txid));
+            ret.push_back(Util::ToHexFast(txid));
         return ret;
     });
 }
