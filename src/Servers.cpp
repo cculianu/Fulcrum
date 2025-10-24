@@ -2078,9 +2078,10 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
     auto validateAndPushTxn = [&](const QVariant &vartx) {
         if (!IsMetaTypeStringLike(vartx)) return false;
         const QByteArray strhextx = vartx.toString().toUtf8().trimmed();
-        if (oversized || (oversized = strhextx.size() > kMaxTxHex) || strhextx.isEmpty()) return false; // txn is oversized
-        const size_t txnSize = strhextx.size() / 2;
-        if (!txnSize || txnSize % 2) return false; // bad size
+        const size_t hexSize = strhextx.size();
+        if (oversized || (oversized = hexSize > kMaxTxHex) || strhextx.isEmpty()) return false; // txn is oversized
+        const size_t txnSize = hexSize / 2;
+        if (!txnSize || hexSize % 2) return false; // bad size
         if (oversized || (oversized = (packageSizeBytes += txnSize) > maxPackageBytes)) return false; // total size is oversized
         if (!packageNTx)
             broadcast_key = Util::ParseHexFast(strhextx); // remember first tx
