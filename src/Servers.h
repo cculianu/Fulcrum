@@ -351,7 +351,8 @@ public:
     /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
     static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash,
                                                      const Options & options, bool hasDSProofRPC, bool hasCashTokens,
-                                                     int rpaStartingHeight /* <=-1 means no RPA */);
+                                                     int rpaStartingHeight /* <=-1 means no RPA */,
+                                                     bool hasBroadcastPackage);
 
     virtual QString prettyName() const override;
 

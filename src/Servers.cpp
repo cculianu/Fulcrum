@@ -1078,7 +1078,8 @@ void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, 
     emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCHOrLTC(*options, isNonBCH(), isLTC()));
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof, bool hasCashTokens, int rpaStartingHeight)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts,
+                                                  bool dsproof, bool hasCashTokens, int rpaStartingHeight, bool hasBroadcastPackage)
 {
     QVariantMap r;
     if (!c) {
@@ -1086,6 +1087,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
         Error() << __func__ << ": called with a nullptr for AbstractConnection FIXME!";
         return r;
     }
+    assert(c->thread() == QThread::currentThread());
     r["pruning"] = QVariant(); // null
     r["genesis_hash"] = QString(Util::ToHexFast(genesisHash));
     r["server_version"] = ServerMisc::AppSubVersion;
@@ -1104,6 +1106,8 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
             {"history_block_limit", opts.rpa.historyBlockLimit},
             {"max_history", opts.rpa.maxHistory}
         };
+    if (hasBroadcastPackage)
+        r["broadcast_package"] = true;
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -1150,10 +1154,12 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const bool isBCH = coin == BTC::Coin::BCH;
+    const auto rsi = bitcoindmgr->getRpcSupportInfo();
     emit c->sendResult(batchId, m.id,
-                       makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->getRpcSupportInfo().hasDSProofRPC,
+                       makeFeaturesDictForConnection(c, storage->genesisHash(), *options, rsi.hasDSProofRPC,
                                                      /* cashTokens = */ isBCH,
-                                                     /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight()));
+                                                     /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight(),
+                                                     rsi.hasSubmitPackageRPC));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
