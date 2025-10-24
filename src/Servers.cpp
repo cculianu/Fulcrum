@@ -1290,7 +1290,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId,
         throw RPCError("Invalid count");
     const auto tip = storage->latestTip().first;
     if (tip < 0) throw InternalError("chain height is negative");
-    static constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
+    static constexpr unsigned MAX_COUNT = 2016u; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
     count = std::min(std::min(unsigned(tip+1) - height, count), MAX_COUNT);
     ok = true;
     const unsigned cp_height = l.size() > 2 ? l.back().toUInt(&ok) : 0;
@@ -1301,26 +1301,47 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId,
             throw RPCError(QString("header height + (count - 1) %1 must be <= cp_height %2 which must be <= chain height %3")
                            .arg(height + (count - 1)).arg(cp_height).arg(tip));
     }
-    generic_do_async(c, batchId, m.id, [height, count, cp_height, this] {
+    const bool headersAsList = c->info.protocolVersion >= Version{1, 6, 0}; // in protocol 1.6.0 we return a list, not a concatenated string
+    generic_do_async(c, batchId, m.id, [height, count, cp_height, headersAsList, this] {
         // EX doesn't seem to return error here if invalid height/no results, so we will do same.
         const auto hdrs = storage->headersFromHeight(height, std::min(count, MAX_COUNT));
-        const size_t nHdrs = hdrs.size(), hdrSz = size_t(BTC::GetBlockHeaderSize()), hdrHexSz = hdrSz*2;
-        QByteArray hexHeaders(int(nHdrs * hdrHexSz), Qt::Uninitialized);
-        for (size_t i = 0, offset = 0; i < nHdrs; ++i, offset += hdrHexSz) {
+        const size_t nHdrs = hdrs.size();
+        constexpr size_t hdrSz = BTC::GetBlockHeaderSize(), hdrHexSz = hdrSz*2u;
+        QVariantMap resp{
+            {"count", quint32(nHdrs)},
+            {"max", MAX_COUNT}
+        };
+        auto getHeaderAndCheckSize = [&](size_t i) -> const QByteArray & {
             const auto & hdr = hdrs[i];
-            if (UNLIKELY(hdr.size() != int(hdrSz))) { // ensure header looks the right size
+            if (hdr.size() != QByteArray::size_type(hdrSz)) [[unlikely]] { // ensure header looks the right size
                 // this should never happen.
                 Error() << "Header size from db height " << i + height << " is not " << hdrSz << " bytes! Database corruption likely! FIXME!";
                 throw RPCError("Server header store invalid", RPC::Code_InternalError);
             }
-            // fast, in-place conversion to hex
-            Util::ToHexFastInPlace(hdr, hexHeaders.data() + offset, hdrHexSz);
-        }
-        QVariantMap resp{
-            {"hex" , QString(hexHeaders)},  // we cast to QString to prevent null for empty string ""
-            {"count", unsigned(hdrs.size())},
-            {"max", MAX_COUNT}
+            return hdr;
         };
+        if (headersAsList) {
+            // Protocol version 1.6.0 and above, return a list of hex headers
+            QVariantList headers;
+            headers.reserve(nHdrs);
+            for (size_t i = 0; i < nHdrs; ++i) {
+                const auto & hdr = getHeaderAndCheckSize(i);
+                headers.push_back(Util::ToHexFast(hdr));
+            }
+            resp["headers"] = headers;
+        } else {
+            // Protocol version < 1.6.0, return a concatenated string of header hex
+            QByteArray hexHeaders(QByteArray::size_type(nHdrs * hdrHexSz), Qt::Uninitialized);
+            for (size_t i = 0, offset = 0; i < nHdrs; ++i, offset += hdrHexSz) {
+                const auto & hdr = getHeaderAndCheckSize(i);
+                // fast, in-place conversion to hex
+                Util::ToHexFastInPlace(hdr, hexHeaders.data() + offset, hdrHexSz);
+            }
+            if (hexHeaders.isEmpty())
+                resp["hex"] = QString(""); // we cast to QString to prevent JSON null for empty string ""
+            else
+                resp["hex"] = hexHeaders; // use QByteArray if non-empty to save cycles
+        }
         if (count && cp_height) {
             // Note: it's possible for a reorg to happen and the chain height to be shortened in parellel in such
             // a way that lastHeight > chainHeight or cp_height > chainHeight, thus making this merkle branch query
