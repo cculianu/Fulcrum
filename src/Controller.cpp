@@ -1381,7 +1381,7 @@ void Controller::process(bool beSilentIfUpToDate)
         // ... nothing..
     } else if (sm->state == State::SynchMempoolFinished) {
         // ...
-        if (bitcoindmgr->hasDSProofRPC())
+        if (bitcoindmgr->getRpcSupportInfo().hasDSProofRPC)
             sm->state = State::SynchDSPs; // remote bitcoind has dsproof rpc, proceed to synch dsps
         else {
             emit synchedMempool();

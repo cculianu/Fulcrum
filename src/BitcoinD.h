@@ -49,19 +49,21 @@ struct BitcoinDInfo {
     QString subversion; ///< subversion string from daemon e.g.: /Bitcoin Cash Node bla bla;EB32 ..../
     double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
     QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
-    bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
-    struct EstimateFeeInfo {
+    struct RpcSupportInfo {
         bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
         bool hasEstimateSmartFee = false; ///< true if remote bitcoind supports estimatesmartfee. (Bitcoin Core >= 0.15.0, Litecoin >= 0.15.0)
         bool isTwoArgEstimateSmartFee = false; ///< if true, estimatesmartfee has an optional second parameter "mode" (Bitcoin Core >= 0.16.0, Litecoin >= 0.15.0)
+        bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
+        bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
+        bool sendRawTransactionRequiresMaxBurnAmount = false; ///< true if the `sendrawtransaction` RPC requires 2 extra args. Bitcoin Core >= 25.0.0 only.
+        bool hasSubmitPackageRPC = false; ///< true if the `submitpackage` RPC method exists and is what we expect. Bitcoin Core >= 28.0.0 only.
     };
-    EstimateFeeInfo estimateFeeInfo;
+    RpcSupportInfo rpcSupportInfo;
     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
     bool isLTC = false; ///< true if we are actually connected to /LitecoinCore.. node (Litecoin)
     bool isBU = false; ///< true if subversion string starts with "/BCH Unlimited:"
     bool isFlowee = false; ///< true if subversion string starts with "/Flowee"
-    bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
-    bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
+    bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
 
     /// The below field is populated from bitcoind RPC `getzmqnotifications` (if supported and if we are compiled to
     /// use libzmq).  Note that entires in here are auto-transformed by BitcoinDMgr such that:
@@ -134,11 +136,8 @@ public:
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().zmqNotifications
     BitcoinDZmqNotifications getZmqNotifications() const;
 
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().hasDSProofRPC
-    bool hasDSProofRPC() const;
-
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().estimateFeeInfo
-    BitcoinDInfo::EstimateFeeInfo getEstimateFeeInfo() const;
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().rpcSupportInfo
+    BitcoinDInfo::RpcSupportInfo getRpcSupportInfo() const;
 
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)

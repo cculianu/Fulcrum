@@ -601,4 +601,4 @@ void SrvMgr::globalSubsLimitReached()
 }
 
 /// Thread-Safe. Returns whether bitcoind currently probes as having the dsproof RPC.
-bool SrvMgr::hasDSProofRPC() const { return bitcoindmgr && bitcoindmgr->hasDSProofRPC(); }
+bool SrvMgr::hasDSProofRPC() const { return bitcoindmgr && bitcoindmgr->getRpcSupportInfo().hasDSProofRPC; }

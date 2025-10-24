@@ -1146,7 +1146,7 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
 {
     const bool isBCH = coin == BTC::Coin::BCH;
     emit c->sendResult(batchId, m.id,
-                       makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(),
+                       makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->getRpcSupportInfo().hasDSProofRPC,
                                                      /* cashTokens = */ isBCH,
                                                      /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight()));
 }
@@ -1373,15 +1373,15 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::BatchId batchId, c
     }
 
     QVariantList params;
-    const auto estimateFeeInfo = bitcoindmgr->getEstimateFeeInfo();
+    const auto rsi = bitcoindmgr->getRpcSupportInfo();
     // Flowee, BU, early ABC, bchd have a 1-arg estimate fee, newer ABC & BCHN -> 0 arg
-    if (!estimateFeeInfo.isZeroArgEstimateFee)
+    if (!rsi.isZeroArgEstimateFee)
         params.push_back(unsigned(n));
 
-    if (estimateFeeInfo.hasEstimateSmartFee) {
+    if (rsi.hasEstimateSmartFee) {
         // Bitcoin Core removed the "estimatefee" RPC method entirely in version 0.17.0, in favor of "estimatesmartfee"
         // (available starting in 0.15.0)
-        if (estimateFeeInfo.isTwoArgEstimateSmartFee && mode) {
+        if (rsi.isTwoArgEstimateSmartFee && mode) {
             // Core >= 0.16.0 supports a second optional "mode" argument (string), we force it to upper-case since
             // very old Core versions wanted uppercase only here.
             params.push_back(mode->toUpper());
@@ -1959,7 +1959,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
     const QByteArray txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)).left(16) : QByteArrayLiteral("xx"));
     // no need to validate hex here -- bitcoind does validation for us!
     QVariantList params { rawtxhex } ;
-    if (isBTC() && bitcoindmgr->getBitcoinDVersion() >= Version{0,25,0}) {
+    if (bitcoindmgr->getRpcSupportInfo().sendRawTransactionRequiresMaxBurnAmount) {
         // bitcoin core 25.0+ requires specifying maxburnamount in sendrawtransaction call
         // which also requires first sending maxfeerate, set to 0.1btc by default in core
         params.append(0.1);
@@ -2243,7 +2243,7 @@ void Server::rpc_blockchain_transaction_unsubscribe(Client *c, const RPC::BatchI
 // DSPROOF
 void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || not bitcoindmgr->getRpcSupportInfo().hasDSProofRPC)
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto dspid_or_txid = parseFirstHashParamCommon(m, "Invalid dsp hash or tx hash");
     generic_do_async(c, batchId, m.id, [this, dspid_or_txid] {
@@ -2259,7 +2259,7 @@ void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::BatchI
 }
 void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || not bitcoindmgr->getRpcSupportInfo().hasDSProofRPC)
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     generic_do_async(c, batchId, m.id, [this] {
         DSProof::TxHashSet allDescendants;
@@ -2279,14 +2279,14 @@ void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::Batch
 }
 void Server::rpc_blockchain_transaction_dsproof_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || not bitcoindmgr->getRpcSupportInfo().hasDSProofRPC)
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_subscribe(storage->dspSubs(), c, batchId, m, txid);
 }
 void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || not bitcoindmgr->getRpcSupportInfo().hasDSProofRPC)
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_unsubscribe(storage->dspSubs(), c, batchId, m, txid);

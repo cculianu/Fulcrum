@@ -298,18 +298,22 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                             return true;
                     return false;
                 };
-                auto & efi = bitcoinDInfo.estimateFeeInfo;
-                efi.isZeroArgEstimateFee = !res.isCore && !res.isLTC && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
-                efi.hasEstimateSmartFee = (res.isCore || res.isLTC) && bitcoinDInfo.version >= Version{0, 15, 0};
-                efi.isTwoArgEstimateSmartFee = (res.isCore && bitcoinDInfo.version >= Version{0, 16, 0}) || (res.isLTC && bitcoinDInfo.version >= Version{0, 15, 0});
+                // Set up RpcSupportInfo
+                auto & rsi = bitcoinDInfo.rpcSupportInfo;
+                rsi.isZeroArgEstimateFee = !res.isCore && !res.isLTC && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                rsi.hasEstimateSmartFee = (res.isCore || res.isLTC) && bitcoinDInfo.version >= Version{0, 15, 0};
+                rsi.isTwoArgEstimateSmartFee = (res.isCore && bitcoinDInfo.version >= Version{0, 16, 0}) || (res.isLTC && bitcoinDInfo.version >= Version{0, 15, 0});
                 // Implementations known to lack `getzmqnotifications`:
                 // - bchd (all versions)
                 // - BU before version 1.9.1.0
-                bitcoinDInfo.lacksGetZmqNotifications
-                    = lacksGetZmqNotifications
-                    = res.isBchd || (res.isBU && res.version < Version{1, 9, 1});
+                rsi.lacksGetZmqNotifications = lacksGetZmqNotifications = res.isBchd || (res.isBU && res.version < Version{1, 9, 1});
                 // clear hasDSProofRPC until proven to have it via a query
-                bitcoinDInfo.hasDSProofRPC = false;
+                rsi.hasDSProofRPC = false;
+                // Bitcoin Core 25.0+ requires specifying `maxburnamount` in the `sendrawtransaction` RPC
+                // (which, due to bitcoin core weirdness in how it encodes the version int, maps to Version{0, 25, 0}
+                rsi.sendRawTransactionRequiresMaxBurnAmount = res.isCore && bitcoinDInfo.version >= Version{0, 25, 0};
+                // The `submitpackage` RPC is only present and usable by us on Bitcoin Core >= 28.0.0
+                rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 28, 0};
             } // end lock scope
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             BTC::Coin coin = BTC::Coin::BCH; // default BCH if unknown (not segwit)
@@ -478,7 +482,7 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                       << msg.errorMessage();
             setZmqNotifications({}); // clear current, if any
             std::unique_lock g(bitcoinDInfoLock);
-            bitcoinDInfo.lacksGetZmqNotifications = true; // flag that we think remote lacks this RPC
+            bitcoinDInfo.rpcSupportInfo.lacksGetZmqNotifications = true; // flag that we think remote lacks this RPC
         },
         // failure
         [this](const RPC::Message::Id &, const QString &reason) {
@@ -575,22 +579,16 @@ void BitcoinDMgr::setZmqNotifications(const BitcoinDZmqNotifications &zmqs)
     if (changed) emit zmqNotificationsChanged(zmqs);
 }
 
-bool BitcoinDMgr::hasDSProofRPC() const
+BitcoinDInfo::RpcSupportInfo BitcoinDMgr::getRpcSupportInfo() const
 {
     std::shared_lock g(bitcoinDInfoLock);
-    return bitcoinDInfo.hasDSProofRPC;
-}
-
-BitcoinDInfo::EstimateFeeInfo BitcoinDMgr::getEstimateFeeInfo() const
-{
-    std::shared_lock g(bitcoinDInfoLock);
-    return bitcoinDInfo.estimateFeeInfo;
+    return bitcoinDInfo.rpcSupportInfo;
 }
 
 void BitcoinDMgr::setHasDSProofRPC(bool b)
 {
     std::unique_lock g(bitcoinDInfoLock);
-    bitcoinDInfo.hasDSProofRPC = b;
+    bitcoinDInfo.rpcSupportInfo.hasDSProofRPC = b;
 }
 
 auto BitcoinDMgr::getCachedResult(const QString &method) const -> std::optional<CachedResult>
@@ -1062,15 +1060,20 @@ QVariantMap BitcoinDInfo::toVariantMap() const
     QVariantMap ret;
     ret["version"] = version.toString(true);
     ret["subversion"] = subversion;
-    ret["warnings"] = warnings;
     ret["relayfee"] = relayFee;
-    ret["isZeroArgEstimateFee"] = estimateFeeInfo.isZeroArgEstimateFee;
-    ret["hasEstimateSmartFee"] = estimateFeeInfo.hasEstimateSmartFee;
-    ret["isTwoArgEstimateSmartFee"] = estimateFeeInfo.isTwoArgEstimateSmartFee;
-    ret["isBchd"] = isBchd;
+    ret["warnings"] = warnings;
+    ret["isZeroArgEstimateFee"] = rpcSupportInfo.isZeroArgEstimateFee;
+    ret["hasEstimateSmartFee"] = rpcSupportInfo.hasEstimateSmartFee;
+    ret["isTwoArgEstimateSmartFee"] = rpcSupportInfo.isTwoArgEstimateSmartFee;
+    ret["lacksGetZmqNotifications"] = rpcSupportInfo.lacksGetZmqNotifications;
+    ret["hasDSProofRPC"] = rpcSupportInfo.hasDSProofRPC;
+    ret["sendRawTransactionRequiresMaxBurnAmount"] = rpcSupportInfo.sendRawTransactionRequiresMaxBurnAmount;
+    ret["hasSubmitPackageRPC"] = rpcSupportInfo.hasSubmitPackageRPC;
     ret["isCore"] = isCore;
-    ret["lacksGetZmqNotifications"] = lacksGetZmqNotifications;
-    ret["hasDSProofRPC"] = hasDSProofRPC;
+    ret["isLTC"] = isLTC;
+    ret["isBU"] = isBU;
+    ret["isFlowee"] = isFlowee;
+    ret["isBchd"] = isBchd;
     QVariantList zmqs;
     for (auto it = zmqNotifications.begin(); it != zmqNotifications.end(); ++it)
         zmqs.push_back(QVariantList{it.key(), it.value()});

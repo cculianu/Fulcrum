@@ -33,9 +33,6 @@
 #include <QNetworkProxy>
 #include <QSet>
 
-#include <mutex>
-#include <shared_mutex>
-
 struct Options;
 struct PeerInfo;
 class PeerClient;
