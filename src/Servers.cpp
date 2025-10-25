@@ -2116,9 +2116,13 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
         [size = packageSizeBytes, ntx = packageNTx, c, this, broadcast_key, verbose](const RPC::Message &reply) {
             const QVariantMap result = reply.result().toMap();
             const QString packageMsg = result.value("package_msg").toString();
-            c->info.nTxSent += ntx;
-            c->info.nTxBytesSent += size;
-            emit broadcastTxSuccess(ntx, size);
+            const bool success = 0 == packageMsg.compare("success", Qt::CaseInsensitive);
+            if (success) {
+                c->info.nTxSent += ntx;
+                c->info.nTxBytesSent += size;
+                emit broadcastTxSuccess(ntx, size);
+            } else
+                ++c->info.nTxBroadcastErrors;
             QByteArray logLine;
             {
                 QTextStream ts{&logLine, QIODevice::WriteOnly};
@@ -2131,7 +2135,7 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
                 return QVariant{result}; // verbose mode, just return the bitcoind result object verbatim
             // otherwise, non-verbose mode extract results from the "tx-results" dictionary
             const QVariantMap txResultsMap = result.value("tx-results").toMap();
-            QVariantMap ret = {{"success", 0 == packageMsg.compare("success", Qt::CaseInsensitive)}};
+            QVariantMap ret = {{"success", success}};
             QVariantList errors;
             bool warnIsBad = txResultsMap.isEmpty();
             for (const QVariant &item : txResultsMap) {
