@@ -83,8 +83,11 @@ public:
     std::shared_ptr<Client::PerIPData> findExistingPerIPData(const QHostAddress &address) { return perIPData.getOrCreate(address, false); }
 
     /// Thread-Safe. Returns whether bitcoind currently probes as having the dsproof RPC.
-    /// This just forwards the call to BitcoinDMgr::hasDSProofRPC().
+    /// This just forwards the call to BitcoinDMgr::getRpcSupportInfo.hasDSProofRPC.
     bool hasDSProofRPC() const;
+    /// Thread-Safe. Returns whether bitcoind currently probes as having the submitpackage RPC.
+    /// This just forwards the call to BitcoinDMgr::getRpcSupportInfo.hasSubmitPackageRPC.
+    bool hasSubmitPackageRPC() const;
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.

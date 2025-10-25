@@ -178,7 +178,10 @@ void SrvMgr::startServers()
         // same situation here as above -- servers kick the client in question immediately
         connect(this, &SrvMgr::clientIsBanned, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
         // tally tx broadcasts (lifetime)
-        connect(srv, &Server::broadcastTxSuccess, this, [this](unsigned bytes){ ++numTxBroadcasts; txBroadcastBytesTotal += bytes; });
+        connect(srv, &Server::broadcastTxSuccess, this, [this](size_t ntx, size_t bytes){
+            numTxBroadcasts += ntx;
+            txBroadcastBytesTotal += bytes;
+        });
 
         // kicking
         connect(this, &SrvMgr::kickById, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
@@ -601,4 +604,5 @@ void SrvMgr::globalSubsLimitReached()
 }
 
 /// Thread-Safe. Returns whether bitcoind currently probes as having the dsproof RPC.
-bool SrvMgr::hasDSProofRPC() const { return bitcoindmgr && bitcoindmgr->hasDSProofRPC(); }
+bool SrvMgr::hasDSProofRPC() const { return bitcoindmgr && bitcoindmgr->getRpcSupportInfo().hasDSProofRPC; }
+bool SrvMgr::hasSubmitPackageRPC() const { return bitcoindmgr && bitcoindmgr->getRpcSupportInfo().hasSubmitPackageRPC; }

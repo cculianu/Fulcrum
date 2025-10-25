@@ -21,6 +21,8 @@
 
 #include <QThreadPool>
 
+#include <memory>
+
 namespace {
     constexpr bool debugPrt = false;
 }
@@ -87,11 +89,11 @@ void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidF
             Warning() << "A ThreadPool job failed with the error message: " << msg;
     };
     const FailFunc & failFuncToUse (fail ? fail : defaultFail);
-    Job *job = new Job(context, this, work, completion, failFuncToUse);
-    QObject::connect(job, &QObject::destroyed, this, [this](QObject *){ --extant;}, Qt::DirectConnection);
+    std::unique_ptr<Job> job(new Job(context, this, work, completion, failFuncToUse)); // must use `new` because private c'tor
+    QObject::connect(job.get(), &QObject::destroyed, this, [this](QObject *){ --extant;}, Qt::DirectConnection);
     if (const auto njobs = ++extant; njobs > extantLimit) {
         ++noverflows;
-        delete job; // will decrement extant on delete
+        job.reset(); // will decrement extant on delete
         const auto msg = QString("Job limit exceeded (%1)").arg(njobs);
         failFuncToUse(msg);
         return;
@@ -105,17 +107,17 @@ void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidF
     const auto num = ++ctr;
     job->setObjectName(QStringLiteral("Job %1 for '%2'").arg(num).arg( context ? context->objectName() : QStringLiteral("<no context>")));
     if constexpr (debugPrt) {
-        QObject::connect(job, &Job::started, this, [n=job->objectName()]{
+        QObject::connect(job.get(), &Job::started, this, [n=job->objectName()]{
             Debug() << n << " -- started";
         }, Qt::DirectConnection);
-        QObject::connect(job, &Job::completed, this, [n=job->objectName()]{
+        QObject::connect(job.get(), &Job::completed, this, [n=job->objectName()]{
             Debug() << n << " -- completed";
         }, Qt::DirectConnection);
-        QObject::connect(job, &Job::failed, this, [n=job->objectName()](const QString &msg){
+        QObject::connect(job.get(), &Job::failed, this, [n=job->objectName()](const QString &msg){
             Debug() << n << " -- failed: " << msg;
         }, Qt::DirectConnection);
     }
-    pool->start(job, priority);
+    pool->start(job.release(), priority);
 }
 
 bool ThreadPool::shutdownWaitForJobs(int timeout_ms)

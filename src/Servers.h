@@ -287,7 +287,8 @@ protected:
                                    const QString &method, ///< bitcoind method to invoke
                                    const QVariantList &params, ///< params for bitcoind method
                                    const BitcoinDSuccessFunc & successFunc,
-                                   const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
+                                   const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc(),
+                                   std::optional<int> useCacheIfNotOlderThan = std::nullopt);
 
     /// Subclasses may set this pointer if they wish the generic_do_async function above to use a private/custom
     /// threadpool. Otherwise the app-global ::AppThreadPool()  will be used for generic_do_async().
@@ -350,7 +351,8 @@ public:
     /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
     static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash,
                                                      const Options & options, bool hasDSProofRPC, bool hasCashTokens,
-                                                     int rpaStartingHeight /* <=-1 means no RPA */);
+                                                     int rpaStartingHeight /* <=-1 means no RPA */,
+                                                     bool hasBroadcastPackage);
 
     virtual QString prettyName() const override;
 
@@ -362,9 +364,8 @@ signals:
     /// Used to notify clients that are subscribed to headers that a new header has arrived.
     void newHeader(unsigned height, const QByteArray &header);
 
-    /// Emitted for the SrvMgr to update its counters of the number of tx's successfully broadcast.  The argument
-    /// is a size in bytes.
-    void broadcastTxSuccess(unsigned);
+    /// Emitted for the SrvMgr to update its counters of the number of tx's successfully broadcast, and total byte size.
+    void broadcastTxSuccess(size_t nTx, size_t nBytes);
 
     /// Emitted when the SubsMgr throws LimitReached inside rpc_scripthash_subscribe. Conneced to SrvMgr which
     /// will iterate through all perIPData instances and kick the ip address with the most subs.
@@ -408,6 +409,7 @@ private:
     void rpc_blockchain_scripthash_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_broadcast_package(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.6.0
     void rpc_blockchain_transaction_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get_confirmed_blockhash(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
     void rpc_blockchain_transaction_get_height(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -431,6 +433,7 @@ private:
     void rpc_blockchain_utxo_get_info(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // mempool
     void rpc_mempool_get_fee_histogram(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_mempool_get_info(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.6.0
     // daemon
     void rpc_daemon_passthrough(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
 
@@ -628,8 +631,8 @@ public:
     ~Client() override;
 
     struct Info {
-        int errCt = 0; ///< this gets incremented for each peerError. If errCt - nRequests >= 10, then we disconnect the client.
-        int nRequestsRcv = 0; ///< the number of request messages that were non-errors that the client sent us
+        unsigned errCt = 0; ///< this gets incremented for each peerError. If errCt - nRequestsRcv >= 10, then we disconnect the client.
+        unsigned nRequestsRcv = 0; ///< the number of request messages that were non-errors that the client sent us
 
         // server.version info the client sent us
         QString userAgent = "Unknown"; //< the exact useragent string as the client sent us.
@@ -637,7 +640,8 @@ public:
         inline Version uaVersion() const { return Version(userAgent); }
         Version protocolVersion = {1,4,0}; ///< defaults to 1,4,0 if client says nothing.
         bool alreadySentVersion = false;
-        unsigned nTxSent = 0, nTxBroadcastErrors = 0, nTxBytesSent = 0;
+        unsigned nTxSent = 0u, nTxBroadcastErrors = 0u;
+        size_t nTxBytesSent = 0u;
     };
 
     Info info;
