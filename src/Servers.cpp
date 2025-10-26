@@ -2098,7 +2098,8 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
 {
     if (not bitcoindmgr->getRpcSupportInfo().hasSubmitPackageRPC)
         // This is not supported on anything but Bitcoin Core 28.0.0
-        throw RPCError("blockchain.transaction.broadcast_package is only available on Bitcoin Core v28.0.0 or above",
+        throw RPCError("blockchain.transaction.broadcast_package is only available on Bitcoin Core and/or Bitcoin Knots"
+                       " v28.0.0 or above",
                        RPC::ErrorCodes::Code_MethodNotFound);
 
     struct AsyncWorkResult {

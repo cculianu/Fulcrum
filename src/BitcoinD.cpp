@@ -227,7 +227,7 @@ namespace {
                 version = Version::BitcoinDCompact(val);
             isBchd = true;
         } else {
-            isCore = subversion.startsWith("/Satoshi:");
+            isCore = subversion.startsWith("/Satoshi:"); // this matches Bitcoin Knots as well
             isBU = subversion.startsWith("/BCH Unlimited:");
             isBCHN = subversion.startsWith("/Bitcoin Cash Node:");
             isLTC = subversion.startsWith("/LitecoinCore:");
@@ -316,6 +316,11 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 // almost worthless on 27.0.0 (according to ElectrumX devs), and so we require 28.0.0.
                 // See: https://github.com/spesmilo/electrum-protocol/pull/6/files#r2459860616
                 rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 28, 0};
+                if (res.isCore && !rsi.hasSubmitPackageRPC) // warn admin about lack of submitpackage support
+                    Warning() << "*** Compatibility Warning *** The BTC full node backing this " APPNAME " instance"
+                                 " lacks the `submitpackage` RPC, which is needed for full Electrum protocol v1.6"
+                                 " support. Consider upgrading your full node to either Bitcoin Core or Bitcoin Knots"
+                                 " version 28.0.0 or above.";
             } // end lock scope
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             BTC::Coin coin = BTC::Coin::BCH; // default BCH if unknown (not segwit)
