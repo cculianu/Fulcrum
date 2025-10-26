@@ -812,6 +812,8 @@ QString Log::colorize(const QString &str, Color c) {
     return colorStr + str + normalStr;
 }
 
+template <> Log & Log::operator<<(const Color &c) { setColor(c); return *this; }
+
 Debug::~Debug()
 {
     level = Logger::Level::Debug;

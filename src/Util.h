@@ -101,7 +101,6 @@ public:
     virtual ~Log();
 
     template <class T> Log & operator<<(const T & t) { s << t; return *this;  }
-    template <> Log & operator<<(const Color &c) { setColor(c); return *this; }
 
     Log & setColor(Color c) { color = c; colorOverridden = true; return *this; }
     Color getColor() const { return color; }
@@ -121,6 +120,8 @@ protected:
     QTextStream s{&str, QIODevice::WriteOnly|QIODevice::Text};
 };
 
+// specialization to set the color.
+template <> Log & Log::operator<<(const Color &);
 
 /** \brief Stream-like class to print a debug message to the app's logging facility
     Example:
