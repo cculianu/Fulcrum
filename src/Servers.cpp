@@ -2119,9 +2119,9 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
             const size_t maxPackageBytes = std::max<size_t>(1000 * 1000, maxBuffer); // limit package size to max 1MB or maxBuffer, whichever is larger
             size_t & packageSizeBytes = ret.packageSizeBytes, & packageNTx = ret.packageNTx;
             bool oversized = false;
-            // -- Note we need the broadcast_key for broadcast fail filtering -- the key is a single sha256 of the first tx's
-            // -- bytes + packageNTx + packageSizeBytes, but just the first 16 bytes of this hash are taken. Keeping the key
-            // -- small is essential to save cycles.
+            // -- Note we need the broadcast_key for broadcast fail filtering -- the key is a single sha256 of the last
+            // -- txn's hex + packageNTx + packageSizeBytes, but just the first 16 bytes of this hash are taken.
+            // -- Keeping the key small is essential to save cycles.
             QByteArray & broadcast_key = ret.broadcast_key;
             auto validateAndPushTxn = [&](const QVariant &vartx) {
                 if (!IsMetaTypeStringLike(vartx)) return false;
@@ -2131,9 +2131,7 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
                 const size_t txnSize = hexSize / 2;
                 if (!txnSize || hexSize % 2) return false; // bad size
                 if (oversized || (oversized = (packageSizeBytes += txnSize) > maxPackageBytes)) return false; // total size is oversized
-                if (!packageNTx)
-                    broadcast_key = Util::ParseHexFast(strhextx); // remember first tx
-                txns.push_back(strhextx); // shallow copy
+                txns.push_back(broadcast_key = strhextx); // shallow copy
                 ++packageNTx;
                 return true;
             };
@@ -2150,7 +2148,7 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
                     throw RPCError("Invalid verbose argument; expected boolean");
                 verbose = verbArg;
             }
-            // Calculate broadcast_key = Hash(firstTxBytes + packageNTx + packageSizeBytes)[:16]
+            // Calculate broadcast_key = Hash(lastTxHex + packageNTx + packageSizeBytes)[:16]
             broadcast_key.reserve(broadcast_key.size() + sizeof(packageNTx) + sizeof(packageSizeBytes));
             broadcast_key.append(reinterpret_cast<const char *>(&packageNTx), QByteArray::size_type(sizeof(packageNTx)));
             broadcast_key.append(reinterpret_cast<const char *>(&packageSizeBytes), QByteArray::size_type(sizeof(packageSizeBytes)));
