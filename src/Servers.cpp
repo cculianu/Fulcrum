@@ -769,49 +769,85 @@ namespace {
 ServerBase::RPCError::~RPCError() {}
 ServerBase::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
 
-void ServerBase::generic_do_async(Client *c, RPC::BatchId batchId, const RPC::Message::Id &reqId,
-                                  const std::function<QVariant ()> &work, int priority)
+template <std::invocable WorkFunc, typename CompletionFunc>
+requires
+    // WorkFunc must not return void
+    (not std::is_same_v<void, std::invoke_result_t<WorkFunc>>)
+    // and CompletionFunc must either be nullptr or must accept 1 arg, the result of invoking WorkFunc
+    && (std::is_same_v<CompletionFunc, std::nullptr_t> || requires (CompletionFunc c, WorkFunc w) { c(w()); })
+void ServerBase::generic_do_async(Client *c, RPC::BatchId batchId, const RPC::Message::Id &reqId, WorkFunc && work,
+                                  CompletionFunc && completion, int priority)
 {
-    if (LIKELY(work)) {
-        struct ResErr {
-            QVariant results;
-            bool error = false, doDisconnect = false;
-            QString errMsg;
-            int errCode = 0;
-        };
+    // Defensive programming checks in case `work` or `completion` are std::functions that contain no target (are null)
+    if constexpr (std::is_constructible_v<bool, WorkFunc>)
+        if (!work) [[unlikely]] {
+            Error() << "INTERNAL ERROR: work Func must be valid! FIXME!";
+            return;
+        }
+    if constexpr (std::is_constructible_v<bool, CompletionFunc> && !std::is_same_v<CompletionFunc, std::nullptr_t>)
+        if (!completion) [[unlikely]] {
+            Error() << "INTERNAL ERROR: completion Func must be valid! FIXME!";
+            return;
+        }
 
-        auto reserr = std::make_shared<ResErr>(); ///< shared with lambda for both work and completion. this is how they communicate.
+    struct SharedState {
+        using ResultsT = std::invoke_result_t<WorkFunc>;
+        std::optional<ResultsT> results; // we make this a std::optional to not require ResultsT to be default-constructible
+        bool error = false, doDisconnect = false;
+        QString errMsg;
+        int errCode = 0;
+        WorkFunc work;
+        CompletionFunc completion;
+        SharedState(WorkFunc && w, CompletionFunc && c) : work(std::move(w)), completion(std::move(c)) {}
+    };
 
-        (asyncThreadPool ? asyncThreadPool : ::AppThreadPool())->submitWork(
-            c, // <--- all work done in client context, so if client is deleted, completion not called
-            // runs in worker thread, must not access anything other than reserr and work
-            [reserr,work]{
-                try {
-                    QVariant result = work();
-                    reserr->results.swap( result ); // constant-time copy
-                } catch (const RPCError & e) {
-                    reserr->error = true;
-                    reserr->doDisconnect = e.disconnect;
-                    reserr->errMsg = e.what();
-                    reserr->errCode = e.code;
-                }
-            },
-            // completion: runs in client thread (only called if client not already deleted)
-            [c, batchId, reqId, reserr] {
-                if (reserr->error) {
-                    emit c->sendError(reserr->doDisconnect, reserr->errCode, reserr->errMsg, batchId, reqId);
-                    return;
-                }
-                // no error, send results to client
-                emit c->sendResult(batchId, reqId, reserr->results);
-            },
-            // default fail function just sends json rpc error "internal error: <message>"
-            defaultTPFailFunc(c, batchId, reqId),
-            // lower is sooner, higher is later. Default 0.
-            priority
-        );
-    } else
-        Error() << "INTERNAL ERROR: work must be valid! FIXME!";
+    // Shared with both work and completion lambdas that we pass to submitWork. This is how they communicate.
+    auto state = std::make_shared<SharedState>(std::move(work), std::move(completion));
+
+    (asyncThreadPool ? asyncThreadPool : ::AppThreadPool())->submitWork(
+        c, // <--- all work done in client context, so if client is deleted, completion not called
+        // runs in worker thread, must not access anything other than `state`
+        [state] {
+            try {
+                state->results.emplace(state->work());
+            } catch (const RPCError & e) {
+                state->error = true;
+                state->doDisconnect = e.disconnect;
+                state->errMsg = e.what();
+                state->errCode = e.code;
+            } catch (const std::exception &e) {
+                state->error = true;
+                state->doDisconnect = false;
+                state->errMsg = QString("internal error: %1").arg(e.what());
+                state->errCode = RPC::ErrorCodes::Code_InternalError;
+            }
+        },
+        // completion: runs in client thread (only called if client still alive)
+        [c, batchId, reqId, state] {
+            if (state->error) {
+                emit c->sendError(state->doDisconnect, state->errCode, state->errMsg, batchId, reqId);
+                return;
+            }
+            // no error, send results to client or invoke completion if specified
+            try {
+                ThrowInternalErrorIf(not state->results, "Defensive programming check failed");
+                if constexpr (std::is_same_v<CompletionFunc, std::nullptr_t>)
+                    // no completion defined, default behavior: send results to client
+                    emit c->sendResult(batchId, reqId, *state->results);
+                else
+                    // completion defined, invoke it
+                    state->completion(*state->results);
+            } catch (const std::exception &e) {
+                // Uh oh, this should never happen!
+                Error() << "Caught unexepected exception in generic_do_async: " << e.what();
+                emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, e.what(), batchId, reqId);
+            }
+        },
+        // default fail function just sends json rpc error "internal error: <message>"
+        defaultTPFailFunc(c, batchId, reqId),
+        // lower is sooner, higher is later. Default 0.
+        priority
+    );
 }
 
 void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId, const RPC::Message::Id & reqId,
@@ -2062,111 +2098,133 @@ void Server::rpc_blockchain_transaction_broadcast_package(Client *c, const RPC::
 {
     if (not bitcoindmgr->getRpcSupportInfo().hasSubmitPackageRPC)
         // This is not supported on anything but Bitcoin Core 28.0.0
-        throw RPCError("blockchain.transaction.broadcast_package is only available on BTC running Core v28.0.0 or above",
+        throw RPCError("blockchain.transaction.broadcast_package is only available on Bitcoin Core v28.0.0 or above",
                        RPC::ErrorCodes::Code_MethodNotFound);
-    const QVariantList paramsIn = m.paramsList();
-    const QVariantList txnsIn = paramsIn[0].toList();
-    QVariantList txns;
-    txns.reserve(txnsIn.size());
-    const size_t maxPackageBytes = std::max<size_t>(1000 * 1000, options->maxBuffer.load()); // limit package size to max 1MB or maxBuffer, whichever is larger
-    size_t packageSizeBytes = 0u, packageNTx = 0u;
-    bool oversized = false;
-    // -- Note we need the broadcast_key for broadcast fail filtering -- the key is a single sha256 of the first tx's
-    // -- bytes + packageNTx + packageSizeBytes, but just the first 16 bytes of this hash are taken. Keeping the key
-    // -- small is essential to save cycles.
-    QByteArray broadcast_key;
-    auto validateAndPushTxn = [&](const QVariant &vartx) {
-        if (!IsMetaTypeStringLike(vartx)) return false;
-        const QByteArray strhextx = vartx.toString().toUtf8().trimmed();
-        const size_t hexSize = strhextx.size();
-        if (oversized || (oversized = hexSize > kMaxTxHex) || strhextx.isEmpty()) return false; // bad txn size
-        const size_t txnSize = hexSize / 2;
-        if (!txnSize || hexSize % 2) return false; // bad size
-        if (oversized || (oversized = (packageSizeBytes += txnSize) > maxPackageBytes)) return false; // total size is oversized
-        if (!packageNTx)
-            broadcast_key = Util::ParseHexFast(strhextx); // remember first tx
-        txns.push_back(strhextx); // shallow copy
-        ++packageNTx;
-        return true;
-    };
-    // validate txn arg
-    if (txnsIn.isEmpty() || !std::all_of(txnsIn.begin(), txnsIn.end(), validateAndPushTxn))
-        throw RPCError(QString("Invalid raw_txs argument; ") + QString(!oversized ? "expected non-empty list of hex-encoded strings"
-                                                                                  : "oversized"));
-    // validate optional verbose arg, if present
-    bool verbose = false;
-    if (paramsIn.size() >= 2) { // parse optional verbose arg
-        const auto [verbArg, verbArgOk] = parseBoolSemiLooselyButNotTooLoosely(paramsIn[1]);
-        if (!verbArgOk)
-            throw RPCError("Invalid verbose argument; expected boolean");
-        verbose = verbArg;
-    }
-    // Calculate broadcast_key = Hash(firstTxBytes + packageNTx + packageSizeBytes)[:16]
-    broadcast_key.reserve(broadcast_key.size() + sizeof(packageNTx) + sizeof(packageSizeBytes));
-    broadcast_key.append(reinterpret_cast<const char *>(&packageNTx), QByteArray::size_type(sizeof(packageNTx)));
-    broadcast_key.append(reinterpret_cast<const char *>(&packageSizeBytes), QByteArray::size_type(sizeof(packageSizeBytes)));
-    broadcast_key = BTC::HashOnce(broadcast_key).left(16);
 
-    QVariantList params;
-    params.reserve(3);
-    params.push_back(txns);
-    appendMaxBurnAmountForBTCToParams(params);
-    generic_async_to_bitcoind(c, batchId, m.id, "submitpackage", params,
-        // print to log, echo bitcoind's reply to client iff verbose==true, otherwise prepare reply based on bitcond reply
-        [size = packageSizeBytes, ntx = packageNTx, c, this, broadcast_key, verbose](const RPC::Message &reply) {
-            const QVariantMap result = reply.result().toMap();
-            const QString packageMsg = result.value("package_msg").toString();
-            const bool success = 0 == packageMsg.compare("success", Qt::CaseInsensitive);
-            if (success) {
-                c->info.nTxSent += ntx;
-                c->info.nTxBytesSent += size;
-                emit broadcastTxSuccess(ntx, size);
-            } else
-                ++c->info.nTxBroadcastErrors;
-            QByteArray logLine;
-            {
-                QTextStream ts{&logLine, QIODevice::WriteOnly};
-                ts << "Broadcast package for client " << c->id;
-                if (!options->anonLogs)
-                    ts << ", size: " << size << " bytes, nTx: " << ntx << ", response: " << packageMsg;
+    struct AsyncWorkResult {
+        QByteArray broadcast_key;
+        size_t packageSizeBytes = 0u, packageNTx = 0u;
+        QVariantList params; // array of raw tx hex strings, as was specified by incoming RPC param
+        bool verbose = false; // as was specified by incoming RPC param
+    };
+    // We call generic_do_async to do some validation work that is non-trivial in a threadpool thread, and if that
+    // checks out, we proceed to call into bitcond with the `submitpackage` request.
+    generic_do_async(c, batchId, m.id,
+        // Work -- this runs in a threadpool thread (careful not to touch any outside objects from this lambda!!).
+        [paramsIn = m.paramsList(), maxBuffer = options->maxBuffer.load()]{
+            AsyncWorkResult ret;
+            const QVariantList txnsIn = paramsIn[0].toList();
+            QVariantList txns;
+            txns.reserve(txnsIn.size());
+            const size_t maxPackageBytes = std::max<size_t>(1000 * 1000, maxBuffer); // limit package size to max 1MB or maxBuffer, whichever is larger
+            size_t & packageSizeBytes = ret.packageSizeBytes, & packageNTx = ret.packageNTx;
+            bool oversized = false;
+            // -- Note we need the broadcast_key for broadcast fail filtering -- the key is a single sha256 of the first tx's
+            // -- bytes + packageNTx + packageSizeBytes, but just the first 16 bytes of this hash are taken. Keeping the key
+            // -- small is essential to save cycles.
+            QByteArray & broadcast_key = ret.broadcast_key;
+            auto validateAndPushTxn = [&](const QVariant &vartx) {
+                if (!IsMetaTypeStringLike(vartx)) return false;
+                const QByteArray strhextx = vartx.toString().toUtf8().trimmed();
+                const size_t hexSize = strhextx.size();
+                if (oversized || (oversized = hexSize > kMaxTxHex) || strhextx.isEmpty()) return false; // bad txn size
+                const size_t txnSize = hexSize / 2;
+                if (!txnSize || hexSize % 2) return false; // bad size
+                if (oversized || (oversized = (packageSizeBytes += txnSize) > maxPackageBytes)) return false; // total size is oversized
+                if (!packageNTx)
+                    broadcast_key = Util::ParseHexFast(strhextx); // remember first tx
+                txns.push_back(strhextx); // shallow copy
+                ++packageNTx;
+                return true;
+            };
+            // validate txn arg
+            if (txnsIn.isEmpty() || !std::all_of(txnsIn.begin(), txnsIn.end(), validateAndPushTxn))
+                throw RPCError(QString("Invalid raw_txs argument; ")
+                               + QString(!oversized ? "expected non-empty list of hex-encoded strings"
+                                                    : "oversized"));
+            // validate optional verbose arg, if present
+            bool & verbose = ret.verbose;
+            if (paramsIn.size() >= 2) { // parse optional verbose arg
+                const auto [verbArg, verbArgOk] = parseBoolSemiLooselyButNotTooLoosely(paramsIn[1]);
+                if (!verbArgOk)
+                    throw RPCError("Invalid verbose argument; expected boolean");
+                verbose = verbArg;
             }
-            logFilter->broadcast(true, logLine, broadcast_key);
-            if (verbose)
-                return QVariant{result}; // verbose mode, just return the bitcoind result object verbatim
-            // otherwise, non-verbose mode extract results from the "tx-results" dictionary
-            const QVariantMap txResultsMap = result.value("tx-results").toMap();
-            QVariantMap ret = {{"success", success}};
-            QVariantList errors;
-            bool warnIsBad = txResultsMap.isEmpty();
-            for (const QVariant &item : txResultsMap) {
-                const QVariantMap m = item.toMap();
-                if (m.isEmpty() || !Compat::IsMetaType(item, QMetaType::QVariantMap)) [[unlikely]]
-                    warnIsBad = true;
-                else if (auto it = m.find("error"); it != m.end()) {
-                    const QVariantMap err = {{"txid", m.value("txid", "???")}, {"error", it.value().toString()}};
-                    errors.push_back(err);
-                }
-            }
-            if (warnIsBad) [[unlikely]] {
-                Warning() << "Unexpected result format from bitcoind `submitpackage` RPC. Report this issue to the " APPNAME " developers!";
-                DebugM("Result from bitcoind was: ", Json::toUtf8(reply.result(), true));
-            }
-            if (!errors.isEmpty())
-                ret["errors"] = errors;
-            return QVariant{ret};
+            // Calculate broadcast_key = Hash(firstTxBytes + packageNTx + packageSizeBytes)[:16]
+            broadcast_key.reserve(broadcast_key.size() + sizeof(packageNTx) + sizeof(packageSizeBytes));
+            broadcast_key.append(reinterpret_cast<const char *>(&packageNTx), QByteArray::size_type(sizeof(packageNTx)));
+            broadcast_key.append(reinterpret_cast<const char *>(&packageSizeBytes), QByteArray::size_type(sizeof(packageSizeBytes)));
+            broadcast_key = BTC::HashOnce(broadcast_key).left(16);
+
+            QVariantList & params = ret.params;
+            params.reserve(3);
+            params.push_back(txns);
+            appendMaxBurnAmountForBTCToParams(params);
+            return ret;
         },
-        // error func, throw an RPCError that's formatted in a particular way
-        [c, this, broadcast_key](const RPC::Message &errResponse) {
-            ++c->info.nTxBroadcastErrors;
-            const auto errorMessage = errResponse.errorMessage();
-            {
-                // This "logFilter" mechanism was added in Fulcrum 1.2.5 to suppress repeated broadcast fail spam
-                QByteArray logLine;
-                QTextStream{&logLine, QIODevice::WriteOnly} << "Broadcast package fail for client " << c->id << ": " << errorMessage.left(120);
-                logFilter->broadcast(false, logLine, broadcast_key);
-            }
-            throw RPCError(QString("the transaction was rejected by network rules.\n\n%1\n").arg(errorMessage),
-                           RPC::Code_App_BadRequest);
+        // Completion function after above async work completes -- this runs in this object's thread, only if `c` is still alive!
+        [c, batchId, mId = m.id, this](const AsyncWorkResult & res){
+            // Forward RPC request to bitcoind via generic_async_to_bitcoind
+            const auto & [broadcast_key, packageSizeBytes, packageNTx, params, verbose] = res;
+            generic_async_to_bitcoind(c, batchId, mId, "submitpackage", params,
+                // print to log, echo bitcoind's reply to client iff verbose==true, otherwise prepare reply based on bitcond reply
+                [size = packageSizeBytes, ntx = packageNTx, c, this, broadcast_key, verbose](const RPC::Message &reply) {
+                    const QVariantMap result = reply.result().toMap();
+                    const QString packageMsg = result.value("package_msg").toString();
+                    const bool success = 0 == packageMsg.compare("success", Qt::CaseInsensitive);
+                    if (success) {
+                        c->info.nTxSent += ntx;
+                        c->info.nTxBytesSent += size;
+                        emit broadcastTxSuccess(ntx, size);
+                    } else
+                        ++c->info.nTxBroadcastErrors;
+                    QByteArray logLine;
+                    {
+                        QTextStream ts{&logLine, QIODevice::WriteOnly};
+                        ts << "Broadcast package for client " << c->id;
+                        if (!options->anonLogs)
+                            ts << ", size: " << size << " bytes, nTx: " << ntx << ", response: " << packageMsg;
+                    }
+                    logFilter->broadcast(true, logLine, broadcast_key);
+                    if (verbose)
+                        return QVariant{result}; // verbose mode, just return the bitcoind result object verbatim
+                    // otherwise, non-verbose mode extract results from the "tx-results" dictionary
+                    const QVariantMap txResultsMap = result.value("tx-results").toMap();
+                    QVariantMap ret = {{"success", success}};
+                    QVariantList errors;
+                    bool warnIsBad = txResultsMap.isEmpty();
+                    for (const QVariant &item : txResultsMap) {
+                        const QVariantMap m = item.toMap();
+                        if (m.isEmpty() || !Compat::IsMetaType(item, QMetaType::QVariantMap)) [[unlikely]]
+                            warnIsBad = true;
+                        else if (auto it = m.find("error"); it != m.end()) {
+                            const QVariantMap err = {{"txid", m.value("txid", "???")}, {"error", it.value().toString()}};
+                            errors.push_back(err);
+                        }
+                    }
+                    if (warnIsBad) [[unlikely]] {
+                        Warning() << "Unexpected result format from bitcoind `submitpackage` RPC. Report this issue to"
+                                     " the " APPNAME " developers!";
+                        DebugM("Result from bitcoind was: ", Json::toUtf8(reply.result(), true));
+                    }
+                    if (!errors.isEmpty())
+                        ret["errors"] = errors;
+                    return QVariant{ret};
+                },
+                // error func, throw an RPCError that's formatted in a particular way
+                [c, this, broadcast_key](const RPC::Message &errResponse) {
+                    ++c->info.nTxBroadcastErrors;
+                    const auto errorMessage = errResponse.errorMessage();
+                    {
+                        // This "logFilter" mechanism was added in Fulcrum 1.2.5 to suppress repeated broadcast fail spam
+                        QByteArray logLine;
+                        QTextStream{&logLine, QIODevice::WriteOnly} << "Broadcast package fail for client " << c->id
+                                                                    << ": " << errorMessage.left(120);
+                        logFilter->broadcast(false, logLine, broadcast_key);
+                    }
+                    throw RPCError(QString("the transaction was rejected by network rules.\n\n%1\n").arg(errorMessage),
+                                   RPC::Code_App_BadRequest);
+            });
         });
 }
 void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchId, const RPC::Message &m)

@@ -529,7 +529,7 @@ DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stri
       allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin()),
       rpaStartHeight(rpaHeight)
 {
-    FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
+    FatalAssert(to >= from && ctl_ && stride > 0, "Invalid params to DonloadBlocksTask c'tor, FIXME!");
     if (stride > 1 || expectedCt > 1) {
         // tolerate slow request responses (up to 10 mins) if downloading multiple blocks
         // fixes issue #116

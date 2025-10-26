@@ -33,6 +33,8 @@
 #include <QThread>
 #include <QVector>
 
+#include <concepts>
+#include <cstddef> // for std::nullptr_t
 #include <memory> // for shared_ptr
 #include <mutex>
 #include <optional>
@@ -269,7 +271,6 @@ protected:
         ~RPCErrorWithDisconnect() override;
     };
 
-    using AsyncWorkFunc = std::function<QVariant()>;
     struct DontAutoSendReply_t {};
     static constexpr DontAutoSendReply_t DontAutoSendReply{};
     using BitcoinDSuccessFuncResult = std::variant<QVariant, DontAutoSendReply_t>;
@@ -280,7 +281,17 @@ protected:
     /// the work for later and handles sending the response (returned from work) to the client as well as sending
     /// any errors to the client. The `work` functor may throw RPCError, in which case code and message will be
     /// sent instead.  Note that all other exceptions also end up sent to the client as "internal error: MESSAGE".
-    void generic_do_async(Client *client, RPC::BatchId, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work, int priority = 0);
+    /// The optional `CompletionFunc` is used if you want to override the default behavior of sending results to
+    /// the client to do additional processing (see rpc_blockchain_transaction_broadcast_package for example).
+    template <std::invocable WorkFunc, typename CompletionFunc = std::nullptr_t>
+    requires
+        // WorkFunc must not return void
+        (not std::is_same_v<void, std::invoke_result_t<WorkFunc>>)
+        // and CompletionFunc must either be nullptr or must accept 1 arg, the result of invoking WorkFunc
+        && (std::is_same_v<CompletionFunc, std::nullptr_t> || requires (CompletionFunc c, WorkFunc w) { c(w()); })
+    void generic_do_async(Client *client, RPC::BatchId, const RPC::Message::Id &reqId, WorkFunc && work,
+                          CompletionFunc && = {}, int priority = 0);
+
     void generic_async_to_bitcoind(Client *client,
                                    RPC::BatchId batchId, ///< if running in batch context, will be !batchId.isNull()
                                    const RPC::Message::Id & reqId,  ///< the original client request id
