@@ -41,6 +41,7 @@
 #include <random>
 #include <shared_mutex>
 #include <set>
+#include <source_location> /* used in macros */
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -68,6 +69,14 @@ class QHostAddress;
 
 #define LIKELY(bool_expr)   EXPECT(int(bool(bool_expr)), 1)
 #define UNLIKELY(bool_expr) EXPECT(int(bool(bool_expr)), 0)
+
+// Allow for QTextStream to work on std::string and std::string_view
+template <typename StringOrSV>
+requires std::constructible_from<std::string_view, StringOrSV>
+QTextStream & operator<<(QTextStream & ts, const StringOrSV &s) {
+    const std::string_view sv{s};
+    return ts << QString::fromUtf8(QByteArray::fromRawData(sv.data(), sv.size()));
+}
 
 /// Super class of Debug, Warning, Error classes.  Can be instantiated for regular log messages.
 class Log
@@ -98,7 +107,7 @@ public:
 
     /// Used by the DebugM macros, etc.  Unpacks all of its args using operator<< for each arg.
     template <class ...Args>
-    Log & operator()(Args&& ...args) {  ((*this) << ... << args); return *this; }
+    Log & operator()(Args&& ...args) { return ((*this) << ... << args); }
 
 protected:
     static QString colorString(Color c);
@@ -108,14 +117,11 @@ protected:
     int level = 0;
     Color color = Normal;
     QString str = "";
-    QTextStream s = QTextStream(&str, QIODevice::WriteOnly);
+    QTextStream s{&str, QIODevice::WriteOnly|QIODevice::Text};
 };
-
 
 // specialization to set the color.
 template <> Log & Log::operator<<(const Color &);
-// specialization for std::string
-template <> Log & Log::operator<<(const std::string &t);
 
 /** \brief Stream-like class to print a debug message to the app's logging facility
     Example:
@@ -260,10 +266,22 @@ public:
 #define ErrorM(...) (Error()(__VA_ARGS__))
 #define FatalM(...) (Fatal()(__VA_ARGS__))
 
-#define FatalAssert(b,...)                                            \
-    do {                                                              \
-        if (!(b))                                                     \
-            FatalM("ASSERTION FAILED: \"", #b, "\" - ", __VA_ARGS__); \
+#define FatalAssert(b, ...)                                                             \
+    do {                                                                                \
+        if (not static_cast<bool>(b)) [[unlikely]] {                                    \
+            const auto sl = std::source_location::current();                            \
+            FatalM("ASSERTION FAILED: \"", #b, "\" - ", sl.file_name(), ":", sl.line(), \
+                   " - " __VA_OPT__(,) __VA_ARGS__);                                    \
+        }                                                                               \
+    } while (0)
+
+#define ThrowInternalErrorIf(b, ...)                                                                                   \
+    do {                                                                                                               \
+        if (static_cast<bool>(b)) [[unlikely]] {                                                                       \
+            const auto sl = std::source_location::current();                                                           \
+            throw InternalError(Util::StringifyMany(                                                                   \
+                "INTERNAL ERROR: \"", #b, "\" - ", sl.file_name(), ":", sl.line(), " - " __VA_OPT__(,) __VA_ARGS__));  \
+        }                                                                                                              \
     } while (0)
 
 namespace Util {
@@ -1149,6 +1167,14 @@ namespace Util {
     T *reconstructAt(T *obj, Args && ...args) {
         std::destroy_at(obj);
         return std::construct_at(obj, std::forward<Args>(args)...);
+    }
+
+    template <typename ...Args>
+    QString StringifyMany(Args && ...args) {
+        QString s;
+        if constexpr (sizeof...(Args))
+            (QTextStream(&s, QIODevice::WriteOnly|QIODevice::Text) << ... << args);
+        return s;
     }
 
 } // end namespace Util

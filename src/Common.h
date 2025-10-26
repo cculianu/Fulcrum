@@ -38,7 +38,7 @@
 #endif
 
 #include <cstdint>
-#include <exception>
+#include <stdexcept>
 
 #ifdef __clang__
 // turn off the dreaded "warning: class padded with xx bytes, etc" since we aren't writing wire protocols using structs..
