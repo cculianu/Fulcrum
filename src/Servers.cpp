@@ -1232,7 +1232,11 @@ void Server::rpc_server_version(Client *c, const RPC::BatchId batchId, const RPC
     if (l.size() == 1)
         // missing second arg, protocolVersion, default to our minimal protocol version "1.4"
         l.push_back(ServerMisc::MinProtocolVersion.toString());
-    assert(l.size() == 2);
+    assert(l.size() >= 2);
+    if (l.size() > 2 && Debug::isEnabled()) {
+        const auto extraArgsStr = Json::toUtf8(l.mid(2), true).left(80);
+        Debug() << "Client " << c->id << " sent extra server.version args (ignored): " << extraArgsStr;
+    }
 
     if (c->info.alreadySentVersion)
         throw RPCError(QString("%1 already sent").arg(m.method));
@@ -2664,6 +2668,7 @@ void Server::rpc_daemon_passthrough(Client *c, const RPC::BatchId batchId, const
 // --- Server::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
 #define PR RPC::Method::PosParamRange
+#define NO_LIMIT RPC::Method::NO_POS_PARAM_LIMIT
 #define MP(x) static_cast<ServerBase::Member_t>(&Server :: x) // wrapper to cast from narrow method pointer to ServerBase::Member_t
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::dispatchTable);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
@@ -2676,7 +2681,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.features",                   true,               false,    PR{0,0},                    },          MP(rpc_server_features) },
     { {"server.peers.subscribe",            true,               false,    PR{0,0},                    },          MP(rpc_server_peers_subscribe) },
     { {"server.ping",                       true,               false,    PR{0,0},                    },          MP(rpc_server_ping) },
-    { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
+    { {"server.version",                    true,               false,    PR{0,NO_LIMIT},             },          MP(rpc_server_version) },
 
     { {"blockchain.address.get_balance",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_get_balance) },
     { {"blockchain.address.get_first_use",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_first_use) },
@@ -2733,6 +2738,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"mempool.get_info",                  true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_info) },
 };
 #undef MP
+#undef NO_LIMIT
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
 namespace {
