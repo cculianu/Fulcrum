@@ -1418,7 +1418,7 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::BatchId batchId, c
     if (l.size() >= 2) {
         // A second optional "mode" argument (string)
         const auto &var = l.at(1);
-        if (!Compat::IsMetaType(var, QMetaType::Type::QString) && !Compat::IsMetaType(var, QMetaType::Type::QByteArray))
+        if (!IsMetaTypeStringLike(var))
             throw RPCError(QString("%1 second parameter should be a string").arg(m.method));
         mode = var.toString();
     }
@@ -1509,7 +1509,7 @@ void Server::rpc_blockchain_header_get(Client *c, const RPC::BatchId batchId, co
     const QVariantList l(m.paramsList());
     assert(!l.isEmpty());
     // We support the first arg as either a 64-character hash or a numeric height
-    if (const auto var = l[0]; Compat::IsMetaType(var, QMetaType::Type::QString) || Compat::IsMetaType(var, QMetaType::Type::QByteArray)) {
+    if (const auto var = l[0]; IsMetaTypeStringLike(var)) {
         const BlockHash blockHash = parseFirstHashParamCommon(m, "Invalid block hash");
         // first we need to figure out the height of this block hash -- query bitcoind
         generic_async_to_bitcoind(c, batchId, m.id, "getblockheader", {var, true},
