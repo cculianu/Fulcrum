@@ -318,9 +318,10 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 28, 0};
                 if (res.isCore && !rsi.hasSubmitPackageRPC) // warn admin about lack of submitpackage support
                     Warning() << "*** Compatibility Warning *** The BTC full node backing this " APPNAME " instance"
-                                 " lacks the `submitpackage` RPC, which is needed for full Electrum protocol v1.6"
-                                 " support. Consider upgrading your full node to either Bitcoin Core or Bitcoin Knots"
-                                 " version 28.0.0 or above.";
+                                 " lacks a known-good `submitpackage` RPC, which is needed for full Electrum protocol"
+                                 " v1.6 support. Disabling the `blockchain.transaction.broadcast_package` method out of"
+                                 " an abundance of caution. Consider upgrading your full node to either Bitcoin Core or"
+                                 " Bitcoin Knots version 28.0.0 or above.";
             } // end lock scope
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             BTC::Coin coin = BTC::Coin::BCH; // default BCH if unknown (not segwit)
