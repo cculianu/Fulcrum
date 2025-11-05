@@ -2899,7 +2899,7 @@ void Storage::loadCheckTxHash2TxNumMgr()
 // NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
 void Storage::loadCheckUTXOsInDB()
 {
-    FatalAssert(!!p->db.utxoset, __func__, ": Utxo set db is not open");
+    FatalAssert(p->db.utxoset, __func__, ": Utxo set db is not open");
 
     if (options->doSlowDbChecks) {
         Log() << "CheckDB: Verifying utxo set (this may take some time) ...";
@@ -3031,7 +3031,7 @@ void Storage::loadCheckUTXOsInDB()
 // NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
 void Storage::loadCheckShunspentInDB()
 {
-    FatalAssert(!!p->db.shunspent, __func__, ": Shunspent db is not open");
+    FatalAssert(p->db.shunspent, __func__, ": Shunspent db is not open");
 
     if (options->doSlowDbChecks < 2) // this is so slow it requires -C -C be specified
         return;
@@ -3119,7 +3119,7 @@ void Storage::loadCheckShunspentInDB()
 
 void Storage::loadCheckRpaDB()
 {
-    FatalAssert(!!p->db.rpa, __func__, ": RPA db is not open");
+    FatalAssert(p->db.rpa, __func__, ": RPA db is not open");
 
     const bool doSlowChecks = options->doSlowDbChecks;
     const bool doNeededCheck = isRpaNeedsFullCheck();
@@ -3359,7 +3359,7 @@ void Storage::clampRpaEntries_nolock(rocksdb::WriteBatch *batch, BlockHeight fro
 
 void Storage::loadCheckEarliestUndo()
 {
-    FatalAssert(p->db.undo && p->db,  __func__, ": Undo column family is not open");
+    FatalAssert(p->db.undo && p->db, __func__, ": Undo column family is not open");
 
     const Tic t0;
     unsigned ctr = 0;

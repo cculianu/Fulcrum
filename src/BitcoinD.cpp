@@ -18,6 +18,7 @@
 //
 
 #include "BitcoinD.h"
+#include "Util.h"
 #include "ZmqSubNotifier.h"
 
 #include "bitcoin/rpc/protocol.h"
@@ -58,6 +59,8 @@ BitcoinDMgr::~BitcoinDMgr() {  cleanup(); }
 void BitcoinDMgr::startup() {
     Log() << objectName() << ": starting " << nClients << " " << Util::Pluralize("bitcoin RPC client", nClients) << " ...";
 
+    // ensure the cached results table is cleared on reconnect
+    conns += connect(this, &BitcoinDMgr::gotFirstGoodConnection, this, &BitcoinDMgr::clearCachedResultsTable);
     // As soon as a good BitcoinD is up, try and grab the network info (version, subversion, etc).  This must
     // happen early because the values in this info object determine which workarounds we may or may not apply to
     // RPC args.
@@ -120,6 +123,7 @@ void BitcoinDMgr::on_started()
 {
     ThreadObjectMixin::on_started();
     callOnTimerSoon(kRequestTimerPolltimeMS, kRequestTimeoutTimer, [this]{ requestTimeoutChecker(); return true; });
+    callOnTimerSoon(kExpireOldCachedResultsPolltimeMS, kExpireOldCachedResultsTimer, [this] { expireOldCachedResults(); return true; });
 }
 
 void BitcoinDMgr::on_finished()
@@ -223,7 +227,7 @@ namespace {
                 version = Version::BitcoinDCompact(val);
             isBchd = true;
         } else {
-            isCore = subversion.startsWith("/Satoshi:");
+            isCore = subversion.startsWith("/Satoshi:"); // this matches Bitcoin Knots as well
             isBU = subversion.startsWith("/BCH Unlimited:");
             isBCHN = subversion.startsWith("/Bitcoin Cash Node:");
             isLTC = subversion.startsWith("/LitecoinCore:");
@@ -294,15 +298,30 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                             return true;
                     return false;
                 };
-                bitcoinDInfo.isZeroArgEstimateFee = !res.isCore && !res.isLTC && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                // Set up RpcSupportInfo
+                auto & rsi = bitcoinDInfo.rpcSupportInfo;
+                rsi.isZeroArgEstimateFee = !res.isCore && !res.isLTC && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                rsi.hasEstimateSmartFee = (res.isCore || res.isLTC) && bitcoinDInfo.version >= Version{0, 15, 0};
+                rsi.isTwoArgEstimateSmartFee = (res.isCore && bitcoinDInfo.version >= Version{0, 16, 0}) || (res.isLTC && bitcoinDInfo.version >= Version{0, 15, 0});
                 // Implementations known to lack `getzmqnotifications`:
                 // - bchd (all versions)
                 // - BU before version 1.9.1.0
-                bitcoinDInfo.lacksGetZmqNotifications
-                    = lacksGetZmqNotifications
-                    = res.isBchd || (res.isBU && res.version < Version{1, 9, 1});
+                rsi.lacksGetZmqNotifications = lacksGetZmqNotifications = res.isBchd || (res.isBU && res.version < Version{1, 9, 1});
                 // clear hasDSProofRPC until proven to have it via a query
-                bitcoinDInfo.hasDSProofRPC = false;
+                rsi.hasDSProofRPC = false;
+                // Bitcoin Core 25.0+ requires specifying `maxburnamount` in the `sendrawtransaction` RPC
+                // (which, due to bitcoin core weirdness in how it encodes the version int, maps to Version{0, 25, 0}
+                rsi.sendRawTransactionRequiresMaxBurnAmount = res.isCore && bitcoinDInfo.version >= Version{0, 25, 0};
+                // The `submitpackage` RPC is only present in a form usable by us on Bitcoin Core >= 27.0.0, but it was
+                // almost worthless on 27.0.0 (according to ElectrumX devs), and so we require 28.0.0.
+                // See: https://github.com/spesmilo/electrum-protocol/pull/6/files#r2459860616
+                rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 28, 0};
+                if (res.isCore && !rsi.hasSubmitPackageRPC) // warn admin about lack of submitpackage support
+                    Warning() << "*** Compatibility Warning *** The BTC full node backing this " APPNAME " instance"
+                                 " lacks a known-good `submitpackage` RPC, which is needed for full Electrum protocol"
+                                 " v1.6 support. Disabling the `blockchain.transaction.broadcast_package` method out of"
+                                 " an abundance of caution. Consider upgrading your full node to either Bitcoin Core or"
+                                 " Bitcoin Knots version 28.0.0 or above.";
             } // end lock scope
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             BTC::Coin coin = BTC::Coin::BCH; // default BCH if unknown (not segwit)
@@ -471,7 +490,7 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                       << msg.errorMessage();
             setZmqNotifications({}); // clear current, if any
             std::unique_lock g(bitcoinDInfoLock);
-            bitcoinDInfo.lacksGetZmqNotifications = true; // flag that we think remote lacks this RPC
+            bitcoinDInfo.rpcSupportInfo.lacksGetZmqNotifications = true; // flag that we think remote lacks this RPC
         },
         // failure
         [this](const RPC::Message::Id &, const QString &reason) {
@@ -536,18 +555,6 @@ BitcoinDInfo BitcoinDMgr::getBitcoinDInfo() const
 
 void BitcoinDMgr::requestBitcoinDInfoRefresh() { refreshBitcoinDNetworkInfo(); }
 
-bool BitcoinDMgr::isZeroArgEstimateFee() const
-{
-    std::shared_lock g(bitcoinDInfoLock);
-    return bitcoinDInfo.isZeroArgEstimateFee;
-}
-
-bool BitcoinDMgr::isCoreLike() const
-{
-    std::shared_lock g(bitcoinDInfoLock);
-    return bitcoinDInfo.isCore || bitcoinDInfo.isLTC;
-}
-
 Version BitcoinDMgr::getBitcoinDVersion() const
 {
     std::shared_lock g(bitcoinDInfoLock);
@@ -580,25 +587,104 @@ void BitcoinDMgr::setZmqNotifications(const BitcoinDZmqNotifications &zmqs)
     if (changed) emit zmqNotificationsChanged(zmqs);
 }
 
-bool BitcoinDMgr::hasDSProofRPC() const
+BitcoinDInfo::RpcSupportInfo BitcoinDMgr::getRpcSupportInfo() const
 {
     std::shared_lock g(bitcoinDInfoLock);
-    return bitcoinDInfo.hasDSProofRPC;
+    return bitcoinDInfo.rpcSupportInfo;
 }
 
 void BitcoinDMgr::setHasDSProofRPC(bool b)
 {
     std::unique_lock g(bitcoinDInfoLock);
-    bitcoinDInfo.hasDSProofRPC = b;
+    bitcoinDInfo.rpcSupportInfo.hasDSProofRPC = b;
+}
+
+auto BitcoinDMgr::getCachedResult(const QString &method) const -> std::optional<CachedResult>
+{
+    std::shared_lock g(cachedResultsLock);
+    if (auto it = cachedResultsTable.find(method); it != cachedResultsTable.end())
+        return it.value();
+    return std::nullopt;
+}
+
+void BitcoinDMgr::updateCachedResult(const QString &method, qint64 maxAge, QVariant var)
+{
+    const auto now = Util::getTime();
+    std::unique_lock g(cachedResultsLock);
+    auto & r = cachedResultsTable[method];
+    r.result = std::move(var);
+    r.maxAge = maxAge;
+    r.timeStamp = now;
+}
+
+void BitcoinDMgr::clearCachedResultsTable()
+{
+    decltype(cachedResultsTable)::size_type size{};
+    {
+        std::unique_lock g(cachedResultsLock);
+        size = cachedResultsTable.size();
+        cachedResultsTable.clear();
+        cachedResultsTable.squeeze();
+    }
+    DebugM("cachedResultsTable: Cleared ", size, Util::Pluralize(" entry", size));
+}
+
+void BitcoinDMgr::expireOldCachedResults()
+{
+    decltype(cachedResultsTable)::size_type origSize{}, deletions{};
+    {
+        std::unique_lock g(cachedResultsLock);
+        origSize = cachedResultsTable.size();
+        for (auto it = cachedResultsTable.cbegin(); it != cachedResultsTable.cend(); /* */) {
+            if (it.value().ageMSec() > it.value().maxAge) {
+                it = cachedResultsTable.erase(it);
+                ++deletions;
+            } else
+                ++it;
+        }
+        if (deletions) cachedResultsTable.squeeze();
+    }
+    if (deletions)
+        DebugM("cachedResultsTable: Deleted ", deletions, "/", origSize, " expired", Util::Pluralize(" entry", deletions));
 }
 
 /// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
 /// Does not throw. Results/Error/Fail functions are called in the context of the `sender` thread.
 void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & params,
-                                const ResultsF & resf, const ErrorF & errf, const FailF & failf, int timeout)
+                                const ResultsF & resf, const ErrorF & errf, const FailF & failf, int timeout,
+                                std::optional<int> cachedResultOkIfNotOlderThan)
 {
     using namespace BitcoinDMgrHelper;
     constexpr bool debugDeletes = false; // set this to true to print debug messages tracking all the below object deletions (tested: no leaks!)
+
+    // handle caching of responses (such as getmempoolinfo)
+    std::optional<ResultsF> optResf;
+    if (cachedResultOkIfNotOlderThan.has_value()) {
+        if (!params.empty()) [[unlikely]] {
+            // Detect calling code mis-use of this function and print an error message.
+            Error() << "INTERNAL ERROR: Caller to BitcoinDMgr::" << __func__ << " specified a value for"
+                    << "`cachedResultOkIfNotOlderThan`, but also specified a non-empty params list. This usage is not"
+                    << " supported; will proceed without caching. FIXME!";
+        } else {
+            bool missing = true;
+            if (auto optCached = getCachedResult(method)) {
+                missing = false;
+                if (const qint64 age = optCached->ageMSec(); age >= 0 && age <= *cachedResultOkIfNotOlderThan) {
+                    // cached value is good, give it to sender in their event loop
+                    DebugM("Cached `", method, "` is good, returning cached result (age: ", QString::number(age / 1e3, 'f', 3), " sec)");
+                    if (resf)
+                        Util::AsyncOnObject(sender, [m = RPC::Message::makeResponse(rid, optCached->result), resf]{ resf(m); });
+                    return; // return early -- no work to do!
+                }
+            }
+            DebugM("Cached `", method, "` is ", missing ? "missing" : "old", ", proceeding to send request to bitcoind ...");
+            optResf = [this, method, resf, maxAge = *cachedResultOkIfNotOlderThan](const RPC::Message &response) {
+                updateCachedResult(method, maxAge, response.result());
+                if (resf) resf(response);
+            };
+        }
+    }
+
     // A note about ownership: this context object is "owned" by the connections below to ->sender *only*.
     // It will be auto-deleted when the shared_ptr refct held by the lambdas drops to 0.  This is guaranteed
     // to happen either as a result of a successful request reply, or due to bitcoind failure, or if the sender
@@ -616,7 +702,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString{}, rid.toString()));
 
     // result handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
-    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender/*, method, params, timeout*/](const RPC::Message &response) {
+    connect(context.get(), &ReqCtxObj::results, sender, [context, resf = optResf.value_or(resf), sender/*, method, params, timeout*/](const RPC::Message &response) {
         // Debug code for troubleshooting the extent of bitcoind backlogs in servicing requests
         /*
         const auto now = Util::getTime();
@@ -982,16 +1068,28 @@ QVariantMap BitcoinDInfo::toVariantMap() const
     QVariantMap ret;
     ret["version"] = version.toString(true);
     ret["subversion"] = subversion;
-    ret["warnings"] = warnings;
     ret["relayfee"] = relayFee;
-    ret["isZeroArgEstimateFee"] = isZeroArgEstimateFee;
-    ret["isBchd"] = isBchd;
+    ret["warnings"] = warnings;
+    ret["isZeroArgEstimateFee"] = rpcSupportInfo.isZeroArgEstimateFee;
+    ret["hasEstimateSmartFee"] = rpcSupportInfo.hasEstimateSmartFee;
+    ret["isTwoArgEstimateSmartFee"] = rpcSupportInfo.isTwoArgEstimateSmartFee;
+    ret["lacksGetZmqNotifications"] = rpcSupportInfo.lacksGetZmqNotifications;
+    ret["hasDSProofRPC"] = rpcSupportInfo.hasDSProofRPC;
+    ret["sendRawTransactionRequiresMaxBurnAmount"] = rpcSupportInfo.sendRawTransactionRequiresMaxBurnAmount;
+    ret["hasSubmitPackageRPC"] = rpcSupportInfo.hasSubmitPackageRPC;
     ret["isCore"] = isCore;
-    ret["lacksGetZmqNotifications"] = lacksGetZmqNotifications;
-    ret["hasDSProofRPC"] = hasDSProofRPC;
+    ret["isLTC"] = isLTC;
+    ret["isBU"] = isBU;
+    ret["isFlowee"] = isFlowee;
+    ret["isBchd"] = isBchd;
     QVariantList zmqs;
     for (auto it = zmqNotifications.begin(); it != zmqNotifications.end(); ++it)
         zmqs.push_back(QVariantList{it.key(), it.value()});
     ret["zmqNotifications"] = zmqs;
     return ret;
+}
+
+qint64 BitcoinDMgr::CachedResult::ageMSec() const
+{
+    return std::max<qint64>(Util::getTime() - timeStamp, 0);
 }

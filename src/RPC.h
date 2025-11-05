@@ -32,6 +32,7 @@
 #include <QVariant>
 #include <QVector>
 
+#include <limits>
 #include <memory>
 #include <optional>
 #include <utility> // for std::pair, std::move
@@ -81,7 +82,7 @@ namespace RPC {
         /// If allowsNotifications is false, notifications for this method will be silently ignored.
         bool allowsRequests = true, allowsNotifications = false;
         using PosParamRange = std::pair<unsigned, unsigned>;
-        static constexpr unsigned NO_POS_PARAM_LIMIT = UINT_MAX; ///< use this for PosParamsRange.second to specify no limit.
+        static constexpr unsigned NO_POS_PARAM_LIMIT = std::numeric_limits<unsigned>::max(); ///< use this for PosParamsRange.second to specify no limit.
         /// If this optional !has_value, then positional arguments (list for "params") are rejected.
         /// Otherwise, specify an unsigned int range where .first is the minimum and .second is the maximum number
         /// of positional parameters accepted.  If .second is NO_POS_PARAM_LIMIT, then any number of parameters from

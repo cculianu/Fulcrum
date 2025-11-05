@@ -18,7 +18,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 ### Highlights:
 
 - *Fast:* Written in 100% modern `C++20` using multi-threaded and asynchronous programming techniques.
-- *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.5.3 protocol](https://electrum-cash-protocol.readthedocs.io/en/latest/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
+- *A drop-in replacement for ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.6 protocol](https://electrum-cash-protocol.readthedocs.io/en/latest/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to an ElectrumX server.
 - *Cross-platform:* While this codebase was mainly developed and tested on MacOS, Windows and Linux, it should theoretically work on any modern OS (such as *BSD) that has Qt5 or Qt6 Networking available.
 - ***NEW!*** *Triple-coin:* Supports BCH, BTC and LTC.
 
@@ -27,7 +27,8 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 - *For running*:
   - A supported bitcoin full node with its JSON-RPC service enabled, preferably running on the same machine.
     - *For **BCH***: Bitcoin Cash Node, Bitcoin Cash Unlimited, Flowee, and bchd have all been tested extensively and are known to work well with this software.
-    - *For **BTC***: Bitcoin Core v0.17.0 or later.  Bitcoin Knots is also rumored to work but is untested by the developer.
+    - *For **BTC***: Bitcoin Core v0.17.0 or later.  Bitcoin Knots is also known to work perfectly well.
+      - Note: Bitcoin Core and/or Bitcoin Knots >= v28.0.0 are recommended for full Electrum Protocol v1.6 support.
     - *For **LTC***: Litecoin Core v0.17.0 or later.  No other full nodes are supported by this software for LTC.
       - If using Litcoin Core v0.21.2 or above, your daemon is serializing data using mweb extensions. While Fulcrum understands this serialization format, your Electrum-LTC clients may not. You can run `litecoind` with `-rpcserialversion=1` to have your daemon return transactions in pre-mweb format which is understood by most Electrum-LTC clients.
     - The node must have txindex enabled e.g. `txindex=1`.
@@ -160,7 +161,7 @@ Execute the binary, with `-h` to see the built-in help, e.g. `./Fulcrum -h`. You
 
 It is recommended you specify a data dir (`-D` via CLI or `datadir=` via config file) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
 
-As long as the server is still synchronizing, all public-facing ports will not yet be bound for listening and as such an attempt to connect to one of the RPC ports will fail with a socket error such as e.g. "Connection refused". Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash (or Electrum if on BTC).
+As long as the server is still synchronizing, all public-facing ports will not yet be bound for listening and as such an attempt to connect to one of the RPC ports will fail with a socket error such as e.g. "Connection refused". Once the server finishes synching it will behave like an ElectrumX server and it can receive requests from Electron Cash (or Electrum if on BTC).
 
 You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulcrum/blob/master/doc/unix-man-page.md).
 

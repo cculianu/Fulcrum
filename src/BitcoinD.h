@@ -33,6 +33,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <vector>
@@ -48,14 +49,21 @@ struct BitcoinDInfo {
     QString subversion; ///< subversion string from daemon e.g.: /Bitcoin Cash Node bla bla;EB32 ..../
     double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
     QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
-    bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
-    bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
+    struct RpcSupportInfo {
+        bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
+        bool hasEstimateSmartFee = false; ///< true if remote bitcoind supports estimatesmartfee. (Bitcoin Core >= 0.15.0, Litecoin >= 0.15.0)
+        bool isTwoArgEstimateSmartFee = false; ///< if true, estimatesmartfee has an optional second parameter "mode" (Bitcoin Core >= 0.16.0, Litecoin >= 0.15.0)
+        bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
+        bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
+        bool sendRawTransactionRequiresMaxBurnAmount = false; ///< true if the `sendrawtransaction` RPC requires 2 extra args. Bitcoin Core >= 25.0.0 only.
+        bool hasSubmitPackageRPC = false; ///< true if the `submitpackage` RPC method exists and is what we expect. Bitcoin Core >= 28.0.0 only.
+    };
+    RpcSupportInfo rpcSupportInfo;
     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
     bool isLTC = false; ///< true if we are actually connected to /LitecoinCore.. node (Litecoin)
     bool isBU = false; ///< true if subversion string starts with "/BCH Unlimited:"
     bool isFlowee = false; ///< true if subversion string starts with "/Flowee"
-    bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
-    bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
+    bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
 
     /// The below field is populated from bitcoind RPC `getzmqnotifications` (if supported and if we are compiled to
     /// use libzmq).  Note that entires in here are auto-transformed by BitcoinDMgr such that:
@@ -107,7 +115,7 @@ public:
     /// NOTE2: calling this method while this BitcoinDManager is stopped or about to be stopped is not supported.
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF(),
-                       int timeout = kDefaultTimeoutMS);
+                       int timeout = kDefaultTimeoutMS, std::optional<int> cachedResultOkIfNotOlderThan = std::nullopt);
 
     /// Thread-safe.  Returns a copy of the BitcoinDInfo object.  This object is refreshed each time we
     /// reconnect to BitcoinD.  This is called by ServerBase in various places.
@@ -122,20 +130,14 @@ public:
     /// in the db. See also: Storage::genesisHash().
     BlockHash getBitcoinDGenesisHash() const;
 
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isZeroArgEstimateFee
-    bool isZeroArgEstimateFee() const;
-
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns true iff getBitcoinDInfo().isCore || getBitcoinDInfo().isLTC.
-    bool isCoreLike() const;
-
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().version
     Version getBitcoinDVersion() const;
 
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().zmqNotifications
     BitcoinDZmqNotifications getZmqNotifications() const;
 
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().hasDSProofRPC
-    bool hasDSProofRPC() const;
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().rpcSupportInfo
+    BitcoinDInfo::RpcSupportInfo getRpcSupportInfo() const;
 
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
@@ -237,6 +239,32 @@ private:
 
     /// dsproof rpc setter -- called internally by probeBitcoinDHasDSProofRPC
     void setHasDSProofRPC(bool);
+
+    /// Mechanism to cache the last-known response from bitcoind's RPC calls (used for RPC calls such as getmempoolinfo that don't need to be super-up-to-date)
+    struct CachedResult {
+        qint64 timeStamp{}; ///< The time in msec that this was last cached (as returned by Util::getTime())
+        qint64 maxAge{}; ///< The maximum age that is permitted for this cached entry, after which time it may be deleted
+        QVariant result; ///< The last good result from a bitcoind RPC call
+        CachedResult() noexcept = default;
+        /// Returns the "age" of this cached value in msec
+        qint64 ageMSec() const;
+    };
+
+    mutable std::shared_mutex cachedResultsLock;
+    QHash<QString, CachedResult> cachedResultsTable; ///< guarded-by cachedResultsLock
+
+    /// Thread-safe.  Returns a copy of the CachedResult object for method, if found, or std::nullopt otherwise.
+    /// Note that all cached results are cleared each time we reconnect to BitcoinD.
+    std::optional<CachedResult> getCachedResult(const QString &method) const;
+    /// Thread-safe, caches a result, updating the internal timestamp to current.
+    void updateCachedResult(const QString &method, qint64 maxAge, QVariant result);
+    /// Thread-safe, clears the cached results table
+    void clearCachedResultsTable();
+
+    static constexpr auto kExpireOldCachedResultsTimer = "+ExpireZombieCachedResults";
+    static constexpr auto kExpireOldCachedResultsPolltimeMS = 60'000;
+    /// Thread-safe, called from a timer. Deletes old entries from table.
+    void expireOldCachedResults();
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
