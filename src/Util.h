@@ -61,15 +61,6 @@ class QHostAddress;
 #define __PRETTY_FUNCTION__ __FUNCTION__
 #endif
 
-#if defined(__clang__) || defined(__GNUC__)
-#define EXPECT(expr, constant) __builtin_expect(expr, constant)
-#else
-#define EXPECT(expr, constant) (expr)
-#endif
-
-#define LIKELY(bool_expr)   EXPECT(int(bool(bool_expr)), 1)
-#define UNLIKELY(bool_expr) EXPECT(int(bool(bool_expr)), 0)
-
 // Allow for QTextStream to work on std::string and std::string_view
 template <typename StringOrSV>
 requires std::constructible_from<std::string_view, StringOrSV>
@@ -179,10 +170,10 @@ public:
 /// This is fast: It only evaluates args if Trace is enabled. Use this in performance-critical code.
 /// Unfortunately, there is no way to do this exact thing with templates, so we opted for a C-style macro
 /// to avoid evaluating the args in the common !Trace::isEnabled() case.
-#define TraceM(...)                        \
-    do {                                   \
-        if (UNLIKELY(Trace::isEnabled()))  \
-            Trace()(__VA_ARGS__);          \
+#define TraceM(...)                          \
+    do {                                     \
+        if (Trace::isEnabled()) [[unlikely]] \
+            Trace()(__VA_ARGS__);            \
     } while (0)
 
 /** \brief Stream-like class to print an error message to the app's logging facility
@@ -514,10 +505,10 @@ namespace Util {
             if (!killed && !ct && timeout_ms > 0) {
                 cond.wait(&mut, timeout_ms);
             }
-            if (LIKELY(ct != 0)) {
+            if (ct != 0) [[likely]] {
                 ret = data.takeFirst(); --ct;
             }
-            else if (UNLIKELY(killed && throwsIfClosed))
+            else if (killed && throwsIfClosed) [[unlikely]]
                 throw ChannelClosed("Cannot read from closed Channel");
             else if (throwsOnTimeout)
                 throw TimeoutException(QString("Timed out waiting for channel with timeout_ms = %1").arg(long(timeout_ms)));
@@ -526,13 +517,13 @@ namespace Util {
         /// Put to the queue.  Note that if you specified a sizeLimit > 0 it will potentially throw ChannelFull if
         /// the queue is full.  Also may throw ChannelClosed if throwsIfClosed and the channel was closed.
         void put(const T & t) {
-            if (UNLIKELY(killed)) {
+            if (killed) [[unlikely]] {
                 if (throwsIfClosed)
                     throw ChannelClosed("Cannot write to closed Channel");
                 return;
             }
             QMutexLocker ml(&mut);
-            if (UNLIKELY(sizeLimit > 0 && ct >= sizeLimit))
+            if (sizeLimit > 0 && ct >= sizeLimit) [[unlikely]]
                 throw ChannelFull(QString("The channel is full (size = %1)").arg(ct.load()));
             data.push_back(t);
             ++ct;
@@ -672,7 +663,7 @@ namespace Util {
         if (auto const objThr = obj->thread(); QThread::currentThread() == objThr) {
             // direct call to save on a copy c'tor
             return lambda();
-        } else if (UNLIKELY(!objThr->isRunning())) {
+        } else if (!objThr->isRunning()) [[unlikely]] {
             throw ThreadNotRunning(QString("Target object's thread is not running (objectName: '%1')").arg(obj->objectName()));
         } else {
             auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
@@ -924,7 +915,7 @@ namespace Util {
                 bool neg = false;
                 if (std::is_signed_v<T> && n < 0) { // special handling for negatives.. prepend minus, normalize to positive value
                     neg = true;
-                    if (UNLIKELY(n == std::numeric_limits<T>::min())) { // special case for most negative `n`
+                    if (n == std::numeric_limits<T>::min()) [[unlikely]] { // special case for most negative `n`
                         // add digit accounting for its negativeness, then divide n by 10 so that its absolute value
                         // can fit in a positive T
                         tmpBuf[tmpLen++] = '0' - n % 10;

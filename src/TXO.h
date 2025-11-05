@@ -51,7 +51,7 @@ struct TXO {
     // If wide == true, then resulting buffer is always maxSize() bytes (35).
     QByteArray toBytes(bool wide) const {
         QByteArray ret(static_cast<QByteArray::size_type>(serializedSize(wide)), Qt::Uninitialized);
-        if (UNLIKELY(!isValid())) { ret.clear(); return ret; }
+        if (!isValid()) [[unlikely]] { ret.clear(); return ret; }
         std::memcpy(ret.data(), txHash.constData(), HashLen);
         std::byte * const buf = reinterpret_cast<std::byte *>(ret.data() + HashLen);
         buf[0] = std::byte(outN >> 0u & 0xff);

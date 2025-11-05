@@ -109,7 +109,7 @@ void SynchDSPsTask::dlNext(bool phase2, std::shared_ptr<DSPs::DspMap::node_type>
         const auto &hash = node->key();
         auto &proof = node->mapped();
         try {
-            if (UNLIKELY(proof.hash != hash)) // paranoia to enforce invariant
+            if (proof.hash != hash) [[unlikely]] // paranoia to enforce invariant
                 throw InternalError("INTERNAL ERROR: dsproof hash in proof doesn't match its onw map key! FIXME!");
             const QVariantMap vm = reply.result().toMap();
             if (!phase2) {

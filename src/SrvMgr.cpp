@@ -330,7 +330,7 @@ bool SrvMgr::isPeerHostNameBanned(const QString &h) const
 
 void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
 {
-    if (auto count = addrIdMap.remove(addr, cid); UNLIKELY(count > 1)) {
+    if (auto count = addrIdMap.remove(addr, cid); count > 1) [[unlikely]] {
         Warning() << "Multiple clients with id: " << cid << ", address " << addr.toString() << " in addrIdMap in " << __func__ << " -- FIXME!";
     } else if (count) {
         //DebugM("Client id ", cid, " addr ", addr.toString(), " removed from addrIdMap");
@@ -593,7 +593,7 @@ void SrvMgr::globalSubsLimitReached()
             }
             // lock released at scope end
         }
-        if (LIKELY(max > 0)) {
+        if (max > 0) [[likely]] {
             Log() << "Global subs limit reached, kicking all clients for IP " << maxIP.toString() << " (subs: " << max << ")";
             emit kickByAddress(maxIP); // kick!
         } else {

@@ -569,7 +569,7 @@ namespace {
 
         std::unique_ptr<rocksdb::Iterator> newIterChecked() {
             std::unique_ptr<rocksdb::Iterator> iter{db->NewIterator(rdOpts, cf)};
-            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the txhash2txnum db"); // should never happen
+            if (!iter) [[unlikely]] throw DatabaseError("Unable to obtain an iterator to the txhash2txnum db"); // should never happen
             return iter;
         }
 
@@ -1021,7 +1021,7 @@ namespace {
             App *ourApp = app();
             const auto nrec = dra->numRecords();
             for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-                if (UNLIKELY(0 == i % 100 && ourApp && ourApp->signalsCaught()))
+                if (0 == i % 100 && ourApp && ourApp->signalsCaught()) [[unlikely]]
                     throw UserInterrupted("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
                 if (i && 0 == i % 1'000'000) {
                     *(0 == i % 5'000'000 ? std::make_unique<Log>() : std::make_unique<Debug>())
@@ -1061,7 +1061,7 @@ namespace {
             const auto nrec = dra->numRecords();
             std::vector<PreProcessedBlock::TxInfo> fakeInfos;
             for (size_t i = 0; i < nrec; /*i += batchSize*/) {
-                if (UNLIKELY(0 == i % 100 && ourApp && ourApp->signalsCaught()))
+                if (0 == i % 100 && ourApp && ourApp->signalsCaught()) [[unlikely]]
                     throw UserInterrupted("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
                 if (i && 0 == i % 1'000'000) {
                     const double pct = double(i) * 100. / nrec;
@@ -1325,7 +1325,7 @@ namespace {
         const CompactTXO ctxo =
             CompactTXO::fromBytesInPlaceExactSizeRequired(reinterpret_cast<const std::byte *>(key.data()) + HashLen,
                                                           key.size() - HashLen, !legacy);
-        if (UNLIKELY(!ctxo.isValid()))
+        if (!ctxo.isValid()) [[unlikely]]
             // should never happen, indicates db corruption
             throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(ExtractHashXHex(key)));
         return ctxo;
@@ -1405,7 +1405,7 @@ void Storage::startup()
 {
     Log() << "Loading database ...";
 
-    if (UNLIKELY(!subsmgr || !options || !dspsubsmgr || !txsubsmgr))
+    if (!subsmgr || !options || !dspsubsmgr || !txsubsmgr) [[unlikely]]
         throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` and/or `dspsubsmgr` and/or `txsubsmgr` -- FIXME!");
 
     subsmgr->startup(); // trivial, always succeeds if constructed correctly
@@ -2431,7 +2431,7 @@ auto Storage::stats() const -> Stats
         QVariantMap m2;
         const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
         for (const auto prop : { "rocksdb.estimate-table-readers-mem", "rocksdb.cur-size-all-mem-tables"}) {
-            if (std::string s; LIKELY(db->GetProperty(prop, &s)) )
+            if (std::string s; db->GetProperty(prop, &s)) [[likely]]
                 m2[prop] = QString::fromStdString(s);
         }
         if (auto fact = db->GetOptions().table_factory; fact) [[likely]] {
@@ -3175,7 +3175,7 @@ void Storage::loadCheckRpaDB()
                 TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
                 firstHeight = rk.height;
                 iter->SeekToLast();
-                if (UNLIKELY( ! iter->Valid())) throw DatabaseError("Unable to seek to last entry in RPA db. This is unexpected.");
+                if ( ! iter->Valid()) [[unlikely]] throw DatabaseError("Unable to seek to last entry in RPA db. This is unexpected.");
                 rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
                 if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
                 ThrowIfNegativeIfCastedToSigned(rk.height);
@@ -3528,13 +3528,13 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
     if (auto txsIt = mempool.txs.find(txo.txHash); txsIt != mempool.txs.end()) {
         mempoolHit = true; // flag mempool hit so that we don't redundantly check db at end of this function
         const auto & tx = txsIt->second;
-        if (UNLIKELY(!tx)) {
+        if (!tx) [[unlikely]] {
             // Paranoia to detect bugs. This will never happen.
             throw InternalError(QString("TxRef for %1 is null! FIXME!").arg(QString(txo.txHash.toHex())));
         }
         if (txo.outN < tx->txos.size()) {
             const TXOInfo & info = tx->txos[txo.outN];
-            if (auto hxIt = tx->hashXs.find(info.hashX); LIKELY(hxIt != tx->hashXs.end())) {
+            if (auto hxIt = tx->hashXs.find(info.hashX); hxIt != tx->hashXs.end()) [[likely]] {
                 const auto & ioinfo = hxIt->second;
                 if (ioinfo.utxo.count(txo.outN)) {
                     // found! It's unspent!
@@ -3557,7 +3557,7 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
                 // in practice this shouldn't be too bad since it's not often that a particular scripthash
                 // has more than a few mempool tx's.
                 for (const auto & tx : hxTxIt->second) {
-                    if (auto hxInfoIt = tx->hashXs.find(hxTxIt->first); LIKELY(hxInfoIt != tx->hashXs.end())) {
+                    if (auto hxInfoIt = tx->hashXs.find(hxTxIt->first); hxInfoIt != tx->hashXs.end()) [[likely]] {
                         const auto & ioinfo = hxInfoIt->second;
                         if (ioinfo.confirmedSpends.count(txo)) {
                             //Debug() << "TXO: " << txo.toString() << " was in DB but is spent in mempool";
@@ -3965,13 +3965,13 @@ void Storage::addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, const Block
     dbVal.append(bhash.right(kRpaShortBlockHashLen)).append(ser); // concatenate the 4 rightmost bytes of `bhash` + `ser`
     GenericBatchPut(batch, p->db.rpa, RpaDBKey(height), dbVal, rpaErrMsg);
     // Update RpaInfo stats: latest height, etc.
-    if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
+    if (const int lh = p->rpaInfo.lastHeight; lh > -1 && lh != int(height) - 1) [[unlikely]] {
         // This should never happen. Warn if this invariant is violated to detect bugs.
         Warning() << "RPA index lastHeight (" << lh << ") not as expected (" << (int(height) - 1) << ")."
                   << " Flagging DB as needing a full check.";
         setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
     }
-    if (const int fh = p->rpaInfo.firstHeight; UNLIKELY(fh > -1 && fh > int(height))) {
+    if (const int fh = p->rpaInfo.firstHeight; fh > -1 && fh > int(height)) [[unlikely]] {
         // This should never happen. Warn if this invariant is violated to detect bugs.
         Warning() << "RPA index firstHeight (" << fh << ") not as expected (should be <= " << int(height) << ")."
                   << " Flagging DB as needing a full check.";
@@ -4365,7 +4365,7 @@ std::vector<std::optional<TxHash>> Storage::hashesForHeightAndPosVec(BlockHeight
     SharedLockGuard maybeLockedByUs;
     if (existingBlocksLock == nullptr) {
         maybeLockedByUs = SharedLockGuard(p->blocksLock);
-    } else if (UNLIKELY(existingBlocksLock->mutex() != &p->blocksLock)) {
+    } else if (existingBlocksLock->mutex() != &p->blocksLock) [[unlikely]] {
         Error() << "Internal Error: expected the `existingBlocksLock` to be holding `p->blocksLock` (but it is not) in "
                 << __func__ << ". FIXME!";
         return ret;
@@ -4447,7 +4447,7 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
 static auto GetMaxHistoryCtrFunc(const QString &name, const QString &itemName, size_t maxHistory)
 {
     return [name, itemName, maxHistory, ctr = size_t{0u}](size_t incr = 1u) mutable {
-        if (UNLIKELY((ctr += incr) > maxHistory)) {
+        if ((ctr += incr) > maxHistory) [[unlikely]] {
             throw HistoryTooLarge(QString("%1 for %2 exceeds max history %3 with %4 items!")
                                   .arg(name, itemName).arg(maxHistory).arg(ctr));
         }
@@ -4518,7 +4518,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
     tWaitForLock += t0.msec<double>();
 
     const int rpaStartHeight = getConfiguredRpaStartHeight();
-    if (UNLIKELY(rpaStartHeight < 0)) {
+    if (rpaStartHeight < 0) [[unlikely]] {
         // This should have been caught by the caller. Warn to log here since we don't want to do this filtering of
         // requests here in this asynch-called function since it wastes resources to do it this late in the pipeline.
         Warning() << "getRpaHistory() called but RPA appears to be disabled. FIXME!";
@@ -4526,7 +4526,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
     }
 
     const auto tipHeight = latestHeight();
-    if (UNLIKELY( ! tipHeight)) throw InternalError("No blockchain");
+    if (not tipHeight) [[unlikely]] throw InternalError("No blockchain");
     if (unsigned(rpaStartHeight) > *tipHeight) {
         // Nothing to do! Index not yet enabled! Warn here since likely the admin has misconfigured his server.
         Warning() << "getRpaHistory called but rpa_start_height is " << rpaStartHeight << ", which is greater than the"
@@ -4548,7 +4548,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
             // *only* records of the form: Key = 4-byte big endian height, Value = serialized Rpa::PrefixTable.
             // If this assumption changes, update this code to not use this assumption as an optimization.
             std::unique_ptr<rocksdb::Iterator> iter{p->db->NewIterator(p->db.defReadOpts, p->db.rpa)};
-            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the rpa db");
+            if (!iter) [[unlikely]] throw DatabaseError("Unable to obtain an iterator to the rpa db");
 
             BlockHeight height = fromHeight;
             size_t blockScansRemaining = std::max(options->rpa.historyBlockLimit, 1u); // use configured limit (default: 60)
@@ -4590,7 +4590,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
                 tResolveTxIdx += t1.msec<double>();
                 t1 = Tic();
                 for (const auto & optHash : vecOfOptHashes) {
-                    if (LIKELY(optHash)) ret.emplace_back(*optHash, int(height));
+                    if (optHash) [[likely]] ret.emplace_back(*optHash, int(height));
                 }
                 tBuildRes += t1.msec<double>();
             }
@@ -4601,7 +4601,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
         }
         if (includeMempool) {
             auto [mempool, lock] = this->mempool();
-            if (LIKELY(mempool.optPrefixTable)) {
+            if (mempool.optPrefixTable) [[likely]] {
                 const auto origSize = ret.size();
                 const bool needSort = prefix.range().size() > 1u; // if prefix spans multiple rows of mempool table, sort and uniqueify
                 Tic t1;
@@ -4612,7 +4612,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
 
                 t1 = Tic();
                 for (const auto & txHash : txHashes) {
-                    if (auto it = mempool.txs.find(txHash); LIKELY(it != mempool.txs.end())) {
+                    if (auto it = mempool.txs.find(txHash); it != mempool.txs.end()) [[likely]] {
                         const int height = it->second->hasUnconfirmedParents() ? -1 : 0;
                         ret.emplace_back(txHash, height, it->second->fee);
                     } else {
@@ -4693,7 +4693,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                             Warning() << "Cannot find tx for sh " << hashX.toHex() << ". FIXME!!";
                             continue;
                         }
-                        if (auto it2 = tx->hashXs.find(hashX); LIKELY(it2 != tx->hashXs.end())) {
+                        if (auto it2 = tx->hashXs.find(hashX); it2 != tx->hashXs.end()) [[likely]] {
                             const auto & ioinfo = it2->second;
                             // make sure to put any confirmed spends we see now in the "mempool confirmed spends" set
                             // so we know not to include them in the list of utxos from the DB later in this function!
@@ -4706,7 +4706,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
 
                             for (const auto ionum : ioinfo.utxo) {
                                 if (decltype(tx->txos.cbegin()) it3;
-                                        LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
+                                        ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid()) [[likely]]
                                 {
                                     if (ShouldFilter(it3->tokenDataPtr))
                                         continue;
@@ -4732,7 +4732,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
             } // release mempool lock
             { // begin confirmed/db search
                 std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.shunspent));
-                if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
+                if (!iter) [[unlikely]] throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
                 const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
                 // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
@@ -4749,12 +4749,12 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                     IncrementCtrAndThrowIfExceedsMaxHistory();
                     bool ok;
                     auto shval = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
-                    if (UNLIKELY(!ok || !shval.valid)) {
+                    if (!ok || !shval.valid) [[unlikely]] {
                         auto ctxo = extractCompactTXOFromShunspentKey(key, false); /* may throw if size is bad, etc */
                         throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1, script_hash: %2")
                                             .arg(ctxo.toString(), QString(hashX.toHex())));
                     }
-                    if (UNLIKELY(!bitcoin::MoneyRange(shval.amount))) {
+                    if (!bitcoin::MoneyRange(shval.amount)) [[unlikely]] {
                         auto ctxo = extractCompactTXOFromShunspentKey(key, false); /* may throw if size is bad, etc */
                         throw InternalError(QString("Out-of-range amount in db for ctxo %1, script_hash %2: %3")
                                             .arg(ctxo.toString(), QString(hashX.toHex())).arg(shval.amount / shval.amount.satoshi()));
@@ -4809,7 +4809,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
         {
             // confirmed -- read from db using an iterator
             std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.shunspent));
-            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
+            if (!iter) [[unlikely]] throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
             const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
             // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
@@ -4820,15 +4820,15 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
                 const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key, false); // may throw if key has the wrong size, etc
                 bool ok;
                 const auto & [valid, amount, tokenDataPtr] = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
-                if (UNLIKELY(!ok || !valid))
+                if (!ok || !valid) [[unlikely]]
                     throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1 (%2)").arg(ctxo.toString(), QString(hashX.toHex())));
-                if (UNLIKELY(!bitcoin::MoneyRange(amount)))
+                if (!bitcoin::MoneyRange(amount)) [[unlikely]]
                     throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
                 if ( ! ShouldFilter(tokenDataPtr)) {
                     ret.first += amount; // tally the result
                 }
             }
-            if (UNLIKELY(!bitcoin::MoneyRange(ret.first))) {
+            if (!bitcoin::MoneyRange(ret.first)) [[unlikely]] {
                 ret.first = bitcoin::Amount::zero();
                 throw InternalError(QString("Out-of-range total in db for getBalance on scripthash: %1").arg(QString(hashX.toHex())));
             }
@@ -4842,7 +4842,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
                 for (const auto & tx : it->second) {
                     assert(bool(tx));
                     auto it2 = tx->hashXs.find(hashX);
-                    if (UNLIKELY(it2 == tx->hashXs.end())) {
+                    if (it2 == tx->hashXs.end()) [[unlikely]] {
                         throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXME!")
                                             .arg(QString(hashX.toHex()), QString(tx->hash.toHex())));
                     }
@@ -4853,8 +4853,8 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
                             spends += txoinfo.amount;
                     }
                     for (const auto ionum : info.utxo) {
-                        if (decltype(tx->txos.cbegin()) it3; UNLIKELY( ionum >= tx->txos.size()
-                                                                       || !(it3 = tx->txos.cbegin() + ionum)->isValid()) )
+                        if (decltype(tx->txos.cbegin()) it3; ionum >= tx->txos.size()
+                                                             || !(it3 = tx->txos.cbegin() + ionum)->isValid() ) [[unlikely]]
                         {
                             throw InternalError(QString("scripthash %1 lists tx %2, which then lacks a valid TXO IONum %3 for said hashX! FIXME!")
                                                 .arg(QString(hashX.toHex()), QString(tx->hash.toHex())).arg(ionum));
@@ -5010,7 +5010,7 @@ auto Storage::getTxHeights(const std::vector<TxHash> &txHashes) const -> TxHeigh
 
     SharedLockGuard g(p->blocksLock);
     auto txNums = p->db.txhash2txnumMgr->findMany(txHashes);
-    if (UNLIKELY(txNums.size() != txHashes.size()))
+    if (txNums.size() != txHashes.size()) [[unlikely]]
         // this should never happen
         throw InternalError("findMany() returned an unexpected number of elements! FIXME!");
 
@@ -5094,14 +5094,14 @@ size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsi
     for (it->SeekToFirst(); it->Valid() && outDev && lastWriteCt > -1; it->Next()) {
         const auto sh = it->key();
         if (sh.size() == HashLen) {
-            if (LIKELY(ctr)) {
+            if (ctr) [[likely]] {
                 outDev->putChar(',');
                 NL();
             }
             outDev->putChar('"');
             lastWriteCt = outDev->write(Util::ToHexFast(FromSlice(sh)));
             outDev->putChar('"');
-            if (UNLIKELY(!(++ctr % progInterval) && progFunc))
+            if (!(++ctr % progInterval) && progFunc) [[unlikely]]
                 progFunc(ctr);
         }
     }
@@ -5154,7 +5154,7 @@ auto Storage::calcUTXOSetStats(const DumpProgressFunc & progFunc, size_t progInt
             hasher.Write(reinterpret_cast<const uint8_t *>(v.data()), v.size());
             ++ret.utxo_db_ct;
             ret.utxo_db_size_bytes += k.size() + v.size();
-            if (UNLIKELY(!UpdateProgress())) { ret = UTXOSetStats{}; return ret; }
+            if (!UpdateProgress()) [[unlikely]] { ret = UTXOSetStats{}; return ret; }
         }
         ret.utxo_db_shasum.resize(HashLen);
         hasher.Finalize(reinterpret_cast<uint8_t *>(ret.utxo_db_shasum.data()));
@@ -5169,7 +5169,7 @@ auto Storage::calcUTXOSetStats(const DumpProgressFunc & progFunc, size_t progInt
             hasher.Write(reinterpret_cast<const uint8_t *>(v.data()), v.size());
             ++ret.shunspent_db_ct;
             ret.shunspent_db_size_bytes += k.size() + v.size();
-            if (UNLIKELY(!UpdateProgress())) { ret = UTXOSetStats{}; return ret; }
+            if (!UpdateProgress()) [[unlikely]] { ret = UTXOSetStats{}; return ret; }
         }
         ret.shunspent_db_shasum.resize(HashLen);
         hasher.Finalize(reinterpret_cast<uint8_t *>(ret.shunspent_db_shasum.data()));
@@ -5427,12 +5427,12 @@ namespace {
         u.blkInfo.toBytes(&ret);
         // 5. .scriptHashes, 32 bytes each, for all in set
         for (const auto & sh : u.scriptHashes) {
-            if (UNLIKELY(!chkHashLen(sh))) return ret;
+            if (!chkHashLen(sh)) [[unlikely]] return ret;
             ret.append(sh);
         }
         // 6. .addUndos, 76 bytes each * nAddUndos
         for (const auto & [txo, hashX, ctxo] : u.addUndos) {
-            if (UNLIKELY(!chkHashLen(hashX))) return ret;
+            if (!chkHashLen(hashX)) [[unlikely]] return ret;
             ret.append(txo.toBytes(/* force wide (3 byte IONum) = */true));
             ret.append(hashX);
             ret.append(ctxo.toBytes(/* force wide (3 byte IONum) = */true, /*bigEndian=*/false));
@@ -5440,12 +5440,12 @@ namespace {
         // 7. .delUndos, >=85 bytes each * nDelUndos
         for (const auto & [txo, txoInfo] : u.delUndos) {
             ret.append(txo.toBytes(true));
-            if (UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
+            if (!chkHashLen(txoInfo.hashX)) [[unlikely]] return ret;
             const QByteArray serinfo = Serialize(txoInfo);
             ret.append(VarInt(uint32_t(serinfo.size())).byteArray(false)); // append size as VarInt (our own internal compact int)
             ret.append(serinfo);
         }
-        if (UNLIKELY(ret.length() < QByteArray::size_type(hdr.len))) {
+        if (ret.length() < QByteArray::size_type(hdr.len)) [[unlikely]] {
             Warning() << "unexpected length when serializing an UndoInfo object: " << ret.length() << ". FIXME!";
             ret.clear();
             return ret;
@@ -5463,7 +5463,7 @@ namespace {
         UndoInfo ret;
         const auto setOk = [&ok, &ret] (bool b) { if (ok) *ok = b; if (!b) ret.clear(); };
         const auto chkAssertion = [&setOk] (bool assertion, const char *extra = "") {
-            if (UNLIKELY(!assertion)) {
+            if (!assertion) [[unlikely]] {
                 Warning() << "Deserialize UndoInfo called with an invalid byte array! FIXME! " << extra;
                 setOk(false);
             }
@@ -5577,7 +5577,7 @@ namespace {
         constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
         const size_t nBytes = v.size() * compactSize;
         QByteArray ret(QByteArray::size_type(nBytes), Qt::Uninitialized);
-        if (UNLIKELY(nBytes != size_t(ret.size()))) {
+        if (nBytes != size_t(ret.size())) [[unlikely]] {
             throw DatabaseSerializationError(QString("Overflow or other error when attempting to serialize a TxNumVec"
                                                      " of %1 bytes").arg(qulonglong(nBytes)));
         }
@@ -5665,7 +5665,7 @@ namespace {
     template <size_t NB, MyPos where = MyPos::End>
     ByteView MakeTxHashByteKey(const ByteView &bv) {
         const auto len = bv.size();
-        if (UNLIKELY(len != HashLen))
+        if (len != HashLen) [[unlikely]]
             throw BadArgs(QString("%1... is not %2 bytes").arg(QString(Util::ToHexFast(bv.substr(0, 8).toByteArray(false)))).arg(HashLen));
         static_assert(NB > 0 && NB <= HashLen);
         if constexpr (where == MyPos::End)

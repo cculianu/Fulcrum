@@ -862,7 +862,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
         }
         emit mgr->needUpdateSoon(); // tell mgr info may have been updated so it can rebuild its list
         headerToVerify = mgr->headerToVerifyWithPeer();
-        if (LIKELY(headerToVerify.has_value())) {
+        if (headerToVerify.has_value()) [[likely]] {
             // this is the likely branch -- verify that this peer is not on a different chain such as BSV, etc
             if constexpr (debugPrint) DebugM(info.hostName, " requesting header for height ", headerToVerify->first);
             emit sendRequest(newId(), "blockchain.block.header", QVariantList{headerToVerify->first, 0});

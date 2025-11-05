@@ -42,7 +42,8 @@ RecordFile::RecordFile(const QString &fileName_, size_t recordSize_, uint32_t ma
         writeFullHeader(file, magic, nrecs.load());
     } else {
         // existing file, check header
-        if (UNLIKELY(!file.seek(0))) throw FileError(QString("Failed to seek to position 0: %1").arg(file.errorString()));
+        if (!file.seek(0)) [[unlikely]]
+            throw FileError(QString("Failed to seek to position 0: %1").arg(file.errorString()));
         uint32_t tmpMagic = 0;
         uint64_t tmpNRecs = 0;
         if (file.read(reinterpret_cast<char *>(&tmpMagic), sizeof(tmpMagic)) != sizeof(tmpMagic)
@@ -193,7 +194,7 @@ std::optional<uint64_t> RecordFile::appendRecord(const QByteArray &data, bool up
     std::lock_guard g(rwlock);
     std::optional<uint64_t> ret;
 
-    if (UNLIKELY(data.length() != int(recsz))) {
+    if (data.length() != int(recsz)) [[unlikely]] {
         if (errStr) *errStr = QString("Expected data of length %1, instead got data of length %2").arg(recsz).arg(data.length());
     } else if (const auto newNRecs = ++nrecs; !file.seek(offsetOfRec(newNRecs-1))) {
         if (errStr) *errStr = QString("Cannot seek to write record %1 (%2)").arg(newNRecs-1).arg(file.errorString());
@@ -201,7 +202,7 @@ std::optional<uint64_t> RecordFile::appendRecord(const QByteArray &data, bool up
         if (errStr) *errStr = QString("Short write (%1)").arg(file.errorString());
     } else if (updateHeader && !writeNewSizeToHeader(errStr)) {
         // error string already populated properly by writeNewSizeToHeader
-    } else {
+    } else [[likely]] {
         // everything ok
         ret.emplace(newNRecs-1);
     }
@@ -235,7 +236,7 @@ bool RecordFile::BatchAppendContext::append(const QByteArray &data, QString *err
 bool RecordFile::writeNewSizeToHeader(QString *errStr, bool flush)
 {
     bool ret = false;
-    if (UNLIKELY(!file.isOpen())) {
+    if (!file.isOpen()) [[unlikely]] {
         if (errStr) *errStr = "File not open";
     } else if (!file.seek(offsetOfNRecs())) {
         if (errStr) *errStr = QString("Cannot seek to write header for %1").arg(file.fileName());
@@ -246,7 +247,7 @@ bool RecordFile::writeNewSizeToHeader(QString *errStr, bool flush)
         if (errStr)
             *errStr = QString("File size mistmatch for %1, %2 is not a multiple of %3 (+ %4 header). File is now likely corrupted.")
                       .arg(file.fileName()).arg(file.size()).arg(recsz).arg(hdrsz);
-    } else {
+    } else [[likely]] {
         ret = true;
         if (flush)
             file.flush();
@@ -257,7 +258,7 @@ bool RecordFile::writeNewSizeToHeader(QString *errStr, bool flush)
 /* static */
 void RecordFile::writeFullHeader(QFile &f, const uint32_t magic, const uint64_t nRecs)
 {
-    if (UNLIKELY(!f.seek(0))) throw FileError(QString("Failed to seek to position 0: %1").arg(f.errorString()));
+    if (!f.seek(0)) [[unlikely]] throw FileError(QString("Failed to seek to position 0: %1").arg(f.errorString()));
     const uint32_t leMagic = Util::hToLe32(magic); // swab to le byte order
     const uint64_t leN = Util::hToLe64(nRecs); // swab to le byte order
     if (f.write(reinterpret_cast<const char *>(&leMagic), sizeof(leMagic)) != sizeof(leMagic)

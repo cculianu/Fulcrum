@@ -730,7 +730,7 @@ VarDLTaskResult DownloadBlocksTask::process_block_guts(unsigned bnum, const Bloc
 
     auto ppb = PreProcessedBlock::makeShared(bnum, bhash, size_t(rawblock.size()), cblock, rpaTaskIfEnabledForThisBlock);
 
-    if (UNLIKELY(rpaIsEnabledForThisBlock && bnum == unsigned(rpaStartHeight))) {
+    if (rpaIsEnabledForThisBlock && bnum == unsigned(rpaStartHeight)) [[unlikely]] {
         Util::AsyncOnObject(ctl, [height = rpaStartHeight]{
             // We do this in the Controller thread to make the log look pretty, since all other logging
             // user sees at this point is from the Controller thread anyway ...
@@ -940,12 +940,12 @@ CtlTask * Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_
     });
     connect(t, &CtlTask::success, this, [t, this]{
         // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
-        if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
+        if (isTaskDeleted(t)) [[unlikely]] return; // task was stopped from underneath us, this is stale.. abort.
         DebugM( "Got all blocks from: ", t->objectName(), " blockCt: ",  t->goodCt,
                 " nTx,nInp,nOutp: ", t->nTx, ",", t->nIns, ",", t->nOuts);
     });
     connect(t, &CtlTask::errored, this, [t, this]{
-        if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
+        if (!sm || isTaskDeleted(t)) [[unlikely]] return; // task was stopped from underneath us, this is stale.. abort.
         if (sm->state == StateMachine::State::Failure) return; // silently ignore if we are already in failure
         Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage;
         genericTaskErrored();
@@ -974,7 +974,7 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
     connect(task, &CtlTask::retryRecommended, this, [this]{  // only the SynchMempoolTask ever emits this.
-        if (LIKELY(sm))
+        if (sm) [[likely]]
             sm->state = StateMachine::State::Retry;
         AGAIN();
     });
@@ -987,7 +987,7 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
 
 bool Controller::checkRpaIndexNeedsSync(int tipHeight)
 {
-    if (UNLIKELY(!sm)) { Warning() << __func__ << " called in unexpected context. FIXME!"; return false; }
+    if (!sm) [[unlikely]] { Warning() << __func__ << " called in unexpected context. FIXME!"; return false; }
     // check if fast-path early return
     if (skipRpaSanityCheck /* check disabled by previous calls */ || tipHeight < 0 /* no blockchain */)
         return false;
@@ -1080,7 +1080,7 @@ void Controller::process(bool beSilentIfUpToDate)
     }
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
-        if (UNLIKELY(! didReceiveCoinDetectionFromBitcoinDMgr.load(std::memory_order_relaxed))) {
+        if (not didReceiveCoinDetectionFromBitcoinDMgr.load(std::memory_order_relaxed)) [[unlikely]] {
             // If we never once got told definitively what "Coin" we are on by bitcoind, then a race condition
             // can exist between our synch and RPA indexing being turned on/off automatically (for BCH). Since it's
             // generally a bad idea anyway to begin a synch without knowing if we are on BTC and/or LTC (SegWit and/or
@@ -1098,7 +1098,7 @@ void Controller::process(bool beSilentIfUpToDate)
         sm->startedTs = Util::getTimeSecs();
         sm->state = State::WaitingForChainInfo; // more reentrancy prevention paranoia -- in case we get a spurious call to process() in the future
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
-            if (UNLIKELY(!sm || task != sm->mostRecentGetChainInfoTask || isTaskDeleted(task) || sm->state != State::WaitingForChainInfo))
+            if (!sm || task != sm->mostRecentGetChainInfoTask || isTaskDeleted(task) || sm->state != State::WaitingForChainInfo) [[unlikely]]
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
             sm->mostRecentGetChainInfoTask = nullptr;
@@ -1139,7 +1139,7 @@ void Controller::process(bool beSilentIfUpToDate)
             }
 
             sm->net = net;
-            if (UNLIKELY(sm->net == BTC::Net::Invalid)) {
+            if (sm->net == BTC::Net::Invalid) [[unlikely]] {
                 // Unknown chain name. This shouldn't happen but it if does, warn the user since it will make all of
                 // the blockchain.address.* methods not work. This warning will spam the log so hopefully it will not
                 // go unnoticed. I doubt anyone anytime soon will rename "main" or "test" or "regtest", but it pays
@@ -1329,7 +1329,7 @@ void Controller::process(bool beSilentIfUpToDate)
         // RPA enabled in mempool check -- we put this here because it's the best place for it.
         if (storage->isRpaEnabled()) {
             auto optTipHeight = storage->latestHeight();
-            if (UNLIKELY(! optTipHeight)) {
+            if ( ! optTipHeight) [[unlikely]] {
                 // This should never happen -- is here for defensive programming purposes only.
                 Fatal() << "Controller is in SynchMempool but we don't have a blockchain tip! FIXME!";
                 genericTaskErrored();
@@ -1350,7 +1350,7 @@ void Controller::process(bool beSilentIfUpToDate)
         auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag, mempoolIgnoreTxns);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
-            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
+            if (!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool) [[unlikely]]
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
             sm->state = State::SynchMempoolFinished;
@@ -1361,7 +1361,7 @@ void Controller::process(bool beSilentIfUpToDate)
         auto task = newTask<SynchDSPsTask>(false, this, storage, masterNotifySubsFlag);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
-            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs))
+            if (!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs) [[unlikely]]
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
             sm->state = State::SynchDSPsFinished;
@@ -1369,7 +1369,7 @@ void Controller::process(bool beSilentIfUpToDate)
         });
         // synch mempool task is an optional task, not critical. tolerate errors as if they were successes
         connect(task, &CtlTask::errored, this, [this, task]{
-            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs))
+            if (!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs) [[unlikely]]
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
             Warning() << "SynchDSPs RPC error, ignoring...";
@@ -1460,7 +1460,7 @@ void Controller::process_PrintProgress(const QString &verb, unsigned height, siz
                                        size_t nSH, size_t rawBlockSizeBytes, const bool showRateBytes,
                                        std::optional<double> pctOverride)
 {
-    if (UNLIKELY(!sm)) return; // paranoia
+    if (!sm) [[unlikely]] return; // paranoia
     sm->nProgBlocks++;
 
     sm->nTx += nTx;
@@ -1473,7 +1473,7 @@ void Controller::process_PrintProgress(const QString &verb, unsigned height, siz
     sm->nProgIOs += nIns + nOuts;
     sm->nProgSH += nSH;
     sm->nProgBytes += rawBlockSizeBytes;
-    if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
+    if (height && !(height % sm->progressIntervalBlocks)) [[unlikely]] {
         static const QString bytesUnitString = QStringLiteral("B");
         static const auto formatRate = [](double rate, QString thing, bool addComma = true) {
             QString unit = QStringLiteral("sec");
@@ -1936,7 +1936,7 @@ void Controller::zmqTopicStart(ZmqTopic t)
                 if (part.size() == 32) // ensure proper format
                     optPair.emplace(t, part); // this is already in big endian order (which is how we also store them)
             }
-            if (UNLIKELY(!optPair))
+            if (!optPair) [[unlikely]]
                 Error() << "Unexpected format: got zmq " << topic << " notification but it is missing the hash!";
             else {
                 if (auto *state = zmqs.find(t)) [[likely]]

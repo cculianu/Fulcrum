@@ -703,7 +703,7 @@ public:
 
 signals:
     /// Used by ServerBase via a direct connection.  The class d'tor emits this.  This is better for us than
-    /// QObject::destroyed because that runs after this type no longer is a "Client", wheras this is emitted
+    /// QObject::destroyed because that runs after this type no longer is a "Client", whereas this is emitted
     /// immediately from this instance's d'tor.
     void clientDestructing(Client *self);
 protected:

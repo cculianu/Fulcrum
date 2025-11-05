@@ -329,7 +329,7 @@ void SynchMempoolTask::doGetRawMempool()
                     ++newCt;
                     const auto & [it2, inserted] = txsNeedingDownload.try_emplace(hash, std::make_shared<Mempool::Tx>());
                     Mempool::TxRef & tx = it2->second;
-                    if (UNLIKELY(!inserted)) {
+                    if (!inserted) [[unlikely]] {
                         // this should never happen
                         Error() << "FIXME: Error inserting tx into txsNeedingDownload map, already there! TxId: " << hash.toHex();
                         assert(bool(tx));
@@ -373,7 +373,7 @@ void SynchMempoolTask::doGetRawMempool()
                 dspTxsAffected.merge(std::move(res.dspTxsAffected)); /* also update this */
                 // . <--- NB: at this point: affected and res.dspsTxsAffected are moved-from
             }
-            if (UNLIKELY(droppedCt != expectedDropCt)) { // This invariant is checked to detect bugs.
+            if (droppedCt != expectedDropCt) [[unlikely]] { // This invariant is checked to detect bugs.
                 Warning() << "Synch mempool expected to drop " << expectedDropCt << ", but in fact dropped "
                           << droppedCt << " -- retrying getrawmempool";
                 redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
@@ -407,7 +407,7 @@ void SynchMempoolTask::doDLNextTx()
     const size_t nIters = std::min<size_t>(chunkSize, txsNeedingDownload.size());
     for (size_t i = 0; i < nIters; ++i) {
         Mempool::TxRef tx;
-        if (auto it = txsNeedingDownload.begin(); UNLIKELY(it == txsNeedingDownload.end())) {
+        if (auto it = txsNeedingDownload.begin(); it == txsNeedingDownload.end()) [[unlikely]] {
             Error() << "FIXME -- txsNeedingDownload is empty in " << __func__;
             emit errored();
             return;
@@ -487,7 +487,7 @@ void SynchMempoolTask::doDLNextTx()
             // ctx is moved into CTransactionRef below via move construction
             const auto & [it, inserted] = txsDownloaded.try_emplace(tx->hash, tx, bitcoin::MakeTransactionRef(std::move(ctx)));
             const auto & txref = it->second.second;
-            if (UNLIKELY(!inserted)) {
+            if (!inserted) [[unlikely]] {
                 // this should never happen
                 Error() << "FIXME: Error inserting tx into txsDownloaded map, already there! TxId: " << tx->hash.toHex();
                 emit errored();

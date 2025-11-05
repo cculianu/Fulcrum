@@ -356,7 +356,7 @@ namespace RPC {
             Error() << __func__ << " method: " << method << "; Notification requires either a QVarantList or a QVariantMap as its argument! FIXME!";
             return;
         }
-        if (UNLIKELY(json.isEmpty())) {
+        if (json.isEmpty()) [[unlikely]] {
             Error() << __func__ << " method: " << method << "; Unable to generate notification JSON! FIXME!";
             return;
         }
@@ -416,7 +416,7 @@ namespace RPC {
             // otherwise produce some Json right now and send it out to the client
             json = m.toJsonUtf8();
         }
-        if (UNLIKELY(json.isEmpty())) {
+        if (json.isEmpty()) [[unlikely]] {
             Error() << __func__ << ": Unable to generate result JSON! FIXME!";
             return;
         }
@@ -431,7 +431,7 @@ namespace RPC {
         if (batchId.isNull()) return false; // batchId.isNull() means to not filter.
         // first, see if the response corresponds to an extant batch request
         if (auto * const batch = std::as_const(extantBatchProcessors).value(batchId)) {
-            if (UNLIKELY(batch->id != batchId.get())) {
+            if (batch->id != batchId.get()) [[unlikely]] {
                 // Defensive programming: Log and detect invariant violations. batchId should always be batch->id
                 Error() << __func__ << ": batchId " << batchId.get() << " != batch->id " << batch->id << "! FIXME!";
             }
@@ -539,7 +539,7 @@ namespace RPC {
         }
         connect(batch, &QObject::destroyed, this, [this, batchId](QObject *o) {
             // NB: Qt doesn't deliver this signal to us if `this` is no longer is a ConnectionBase * (which is good)
-            if (auto *ptr = extantBatchProcessors.take(batchId); UNLIKELY(ptr && ptr != o)) {
+            if (auto *ptr = extantBatchProcessors.take(batchId); ptr && ptr != o) [[unlikely]] {
                 // this should never happen
                 Error() << "Deleted extant batch processor with id " << batchId.get()
                         << ", but the passed-in QObject pointer differs from the pointer in our table! FIXME!";
@@ -800,7 +800,7 @@ namespace RPC {
         // and never sending a newline.  The below code detects the situation and disconnects clients whereby too much
         // time has expired (5 seconds) with extant unprocessed read buffers at or past the MAX_BUFFER threshold.
         if (const qint64 avail = socket ? socket->bytesAvailable() : 0;
-                UNLIKELY(!memoryWasteTimerActive && avail >= memoryWasteThreshold)) {
+                !memoryWasteTimerActive && avail >= memoryWasteThreshold) [[unlikely]] {
             memoryWasteTimerActive = true;
             callOnTimerSoonNoRepeat(memoryWasteTimeout, memoryWasteTimer, [this]{
                 if (!memoryWasteTimerActive)
@@ -824,7 +824,7 @@ namespace RPC {
             });
             DebugM("Memory waste timer STARTED for ", this->id, " from ", this->peerAddress().toString(),
                    ", read buffer size: ", avail);
-        } else if (UNLIKELY(memoryWasteTimerActive && avail < memoryWasteThreshold)) {
+        } else if (memoryWasteTimerActive && avail < memoryWasteThreshold) [[unlikely]] {
             StopTimer(this, avail);
         }
     }
@@ -957,11 +957,11 @@ namespace RPC {
                             if (!ok || sm->contentLength < 0) {
                                 // ERROR HERE. Expected numeric length, got nonsense
                                 throw Exception(QString("Could not parse content-length: %1").arg(QString(data)));
-                            } else if (UNLIKELY(MAX_BUFFER > 0 && sm->contentLength > MAX_BUFFER)) {
+                            } else if (MAX_BUFFER > 0 && sm->contentLength > MAX_BUFFER) [[unlikely]] {
                                 // ERROR, defend against memory exhaustion attack.
                                 throw Exception(QString("Peer wants to send us %1 bytes of data, exceeding our buffer limit of %2!")
                                                 .arg(sm->contentLength).arg(MAX_BUFFER));
-                            } else if (UNLIKELY(sm->contentLength >= sm->kLargeContentThresh)) {
+                            } else if (sm->contentLength >= sm->kLargeContentThresh) [[unlikely]] {
                                 // take timestamp for large reads  -- we will print elapsed time to debug log below
                                 sm->largeContentT0 = Util::getTime();
                             }
@@ -1007,14 +1007,14 @@ namespace RPC {
                 }
             }
             if (sm->state == St::READING_CONTENT && sm->content.length() >= sm->contentLength) {
-                if (UNLIKELY(sm->largeContentT0)) {
+                if (sm->largeContentT0) [[unlikely]] {
                     DebugM("HttpConnection received large content: ", QString::number(sm->contentLength / 1e6, 'f', 1),
                            " MB in ", QString::number((Util::getTime() - sm->largeContentT0)/1e3, 'f', 3), " secs");
                 }
                 // got a full content packet!
                 {
                     QByteArray json = sm->content;
-                    if (UNLIKELY(sm->content.length() > sm->contentLength)) {
+                    if (sm->content.length() > sm->contentLength) [[unlikely]] {
                         // This shouldn't happen. If we get here, likely below code will fail with nonsense and
                         // connection will be killed. This is here just as a sanity check.
                         Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was (hex): '"
@@ -1037,7 +1037,7 @@ namespace RPC {
                     QTimer::singleShot(0, socket, [this]{on_readyRead();});
                 }
             }
-            if (UNLIKELY(MAX_BUFFER > 0 && socket->bytesAvailable() > MAX_BUFFER)) {
+            if (MAX_BUFFER > 0 && socket->bytesAvailable() > MAX_BUFFER) [[unlikely]] {
                 // this branch normally can't be taken because super class calls setReadBufferSize() on the socket
                 // in on_connected, but we leave this code here in the interests of defensive programming.
                 throw Exception( QString("Peer backbuffer exceeded %1 bytes! Bad peer?").arg(MAX_BUFFER) );
@@ -1206,7 +1206,7 @@ namespace RPC {
             if constexpr (debugBatchExtra) DebugM(objectName(), ": (", __func__, ") done = true, aborting early ...");
             return;
         }
-        if (UNLIKELY(conn.ignoreNewIncomingMessages)) {
+        if (conn.ignoreNewIncomingMessages) [[unlikely]] {
             // This is only ever latched to true in the "Client" subclass and it signifies that the client is being
             // dropped and so we have this short-circuit conditional to save on cycles in that situation and not
             // bother processing further messages.
@@ -1267,7 +1267,7 @@ namespace RPC {
                 if ( ! (conn.errorPolicy & conn.ErrorPolicyDisconnect))
                     emit conn.peerError(conn.id, conn.lastPeerError);
             }
-            if (LIKELY(conn.isGood()))
+            if (conn.isGood()) [[likely]]
                 // keep sending requests to the conn, but only if we didn't go "Bad" (may happen in corner cases above,
                 // or if the connection went down asynchronously between calls)
                 AGAIN();

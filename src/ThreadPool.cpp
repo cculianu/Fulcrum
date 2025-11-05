@@ -55,17 +55,17 @@ void Job::run() {
     if (Util::ThreadName::Get().isEmpty())
         Util::ThreadName::Set(QStringLiteral("Thread (pooled)")); // set thread name for logging
     emit started();
-    if (UNLIKELY(pool->isShuttingDown())) {
+    if (pool->isShuttingDown()) [[unlikely]] {
         Debug() << objectName() << ": blockNewWork = true, exiting early without doing any work";
         return;
 
-    } else if (UNLIKELY(!weakContextRef)) {
+    } else if (!weakContextRef) [[unlikely]] {
         // this is here so we avoid doing any work in case work is costly when we know for a fact the
         // interested/subscribed context object is already deleted.
         DebugM(objectName(), ": context already deleted, exiting early without doing any work");
         return;
     }
-    if (LIKELY(work)) {
+    if (work) [[likely]] {
         try {
             work();
         } catch (const std::exception &e) {
@@ -97,7 +97,7 @@ void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidF
         const auto msg = QString("Job limit exceeded (%1)").arg(njobs);
         failFuncToUse(msg);
         return;
-    } else if (UNLIKELY(njobs < 0)) {
+    } else if (njobs < 0) [[unlikely]] {
         // should absolutely never happen.
         Error() << "FIXME: njobs " << njobs << " < 0!";
     } else if (njobs > extantMaxSeen)

@@ -485,7 +485,7 @@ std::shared_ptr<Client::PerIPData> detail::PerIPDataHolder_Temp::take(QTcpSocket
 bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
 {
     bool ok = true;
-    if (const auto addr = socket->peerAddress(); LIKELY(!addr.isNull())) {
+    if (const auto addr = socket->peerAddress(); !addr.isNull()) [[likely]] {
         auto holder = new detail::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket); // `new` ok; owned by `socket` (parent QObject)
         const auto maxPerIP = options->maxClientsPerIP;
         // check connection limit immediately
@@ -592,7 +592,7 @@ ServerBase::newClient(QTcpSocket *sock)
     const auto addr = ret->peerAddress();
 
     ret->perIPData = detail::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
-    if (UNLIKELY(!ret->perIPData)) {
+    if (!ret->perIPData) [[unlikely]] {
         // This branch should never happen.  But we left it in for defensive programming.
         Error() << "INTERNAL ERROR: Tcp Socket " << sock->peerAddress().toString() << ":" << sock->peerPort() << " had no PerIPData! FIXME!";
         // FUDGE it.
@@ -608,16 +608,16 @@ ServerBase::newClient(QTcpSocket *sock)
         DebugM("Client ", clientId, " destructing");
         if (const auto client = clientsById.take(clientId); client) {
             // purge from map
-            if (UNLIKELY(client != c))
+            if (client != c) [[unlikely]]
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << " client " << clientId << ". FIXME!";
             DebugM("client id ", clientId, " purged from map");
         }
         assert(c->perIPData);
-        if (UNLIKELY(c->nShSubs < 0))
+        if (c->nShSubs < 0) [[unlikely]]
             Error() << "nShSubs for client " << c->id << " is " << c->nShSubs << ". FIXME!";
         // decrement per-IP subs ctr for this client.
         const auto nSubsIP = c->perIPData->nShSubs -= c->nShSubs;
-        if (UNLIKELY(nSubsIP < 0))
+        if (nSubsIP < 0) [[unlikely]]
             Error() << "nShSubs for IP " << addr.toString() << " is " << nSubsIP << ". FIXME!";
         if (nSubsIP == 0 && c->nShSubs)
             DebugM("PerIP: ", addr.toString(), " is no longer subscribed to any subscribables");
@@ -857,7 +857,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
                                            const BitcoinDErrorFunc & errorFunc,
                                            std::optional<int> useCacheIfNotOlderThan)
 {
-    if (UNLIKELY(QThread::currentThread() != c->thread())) {
+    if (QThread::currentThread() != c->thread()) [[unlikely]] {
         // Paranoia, in case I or a future programmer forgets this rule.
         Warning() << __func__ << " is meant to be called from the Client thread only. The current thread is not the"
                   << " Client thread. This may cause problems if the Client is deleted while submitting the request. FIXME!";
@@ -1234,8 +1234,8 @@ void Server::rpc_server_version(Client *c, const RPC::BatchId batchId, const RPC
         l.push_back(ServerMisc::MinProtocolVersion.toString());
     assert(l.size() >= 2);
     if (l.size() > 2 && Debug::isEnabled()) {
-        const auto extraArgsStr = Json::toUtf8(l.mid(2), true).left(80);
-        Debug() << "Client " << c->id << " sent extra server.version args (ignored): " << extraArgsStr;
+        const auto extraArgsStr = Json::toUtf8(l.mid(2), true);
+        Debug() << "Client " << c->id << " sent extra server.version args (ignored): " << Util::Ellipsify(extraArgsStr, 80);
     }
 
     if (c->info.alreadySentVersion)
@@ -1563,7 +1563,7 @@ HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addr
         // unsupported on non-BCH (for now)
         throw RPCError("blockchain.address.* methods are only available on BCH", RPC::ErrorCodes::Code_MethodNotFound);
     const auto net = srvmgr->net();
-    if (UNLIKELY(net == BTC::Net::Invalid))
+    if (net == BTC::Net::Invalid) [[unlikely]]
         // This should never happen in practice, but it pays to be paranoid.
         throw RPCError("Server cannot parse addresses at this time", RPC::ErrorCodes::Code_InternalError);
     constexpr int kAddrLenLimit = 128; // no address is ever really over 64 chars, let alone 128
@@ -1574,7 +1574,7 @@ HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addr
     if (!address.isValid() || !address.isCompatibleWithNet(net))
         throw RPCError(QString("Invalid address: %1").arg(addrStr));
     const auto sh = address.toHashX();
-    if (UNLIKELY(sh.length() != HashLen))
+    if (sh.length() != HashLen) [[unlikely]]
         throw RPCError("Invalid scripthash", RPC::ErrorCodes::Code_InternalError); // this should never happen but we must be defensive here.
     if (addrStrOut) *addrStrOut = addrStr;
     return sh;
@@ -1819,7 +1819,7 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
                                     const HashX &key, const std::optional<QString> &optAlias)
 {
     const auto CheckSubsLimit = [c, &key, this, subs](int64_t nShSubs, bool doUnsub) {
-        if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
+        if (nShSubs > options->maxSubsPerIP) [[unlikely]] {
             if (c->perIPData->isWhitelisted()) {
                 // White-listed, let it go, but print to debug log
                 DebugM( c->prettyName(false, false), " exceeded the per-IP subscribe limit with ", nShSubs,
@@ -1834,7 +1834,7 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
                 }
                 if (doUnsub) {
                     // unsubscribe client right away
-                    if (LIKELY(subs->unsubscribe(c, key))) {
+                    if (subs->unsubscribe(c, key)) [[likely]] {
                         // decrement counters
                         --c->nShSubs;
                         --c->perIPData->nShSubs;
@@ -3437,7 +3437,7 @@ void Client::do_ping()
 
 bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
 {
-    if (UNLIKELY( ! perIPData )) {
+    if ( ! perIPData ) [[unlikely]] {
         // not properly initialized? Should never happen.
         Error() << "INTERNAL ERROR:" << prettyName() << " is missing per-IP data in " << __func__ << ". FIXME!";
         return false;

@@ -225,7 +225,7 @@ namespace BTC
     template <std::convertible_to<ByteView> BytesT>
     struct GenericTrivialHashHasher {
         std::size_t operator()(const ByteView &bv) const noexcept {
-            if (const auto bvsz = bv.size(); LIKELY(bvsz >= sizeof(std::size_t))) {
+            if (const auto bvsz = bv.size(); bvsz >= sizeof(std::size_t)) [[likely]] {
                 // common case, just return the middle 8 bytes reinterpreted as size_t since this is already
                 // a random hash.
                 std::size_t ret;

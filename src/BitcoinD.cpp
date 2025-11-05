@@ -737,7 +737,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     // schedule this ASAP
     Util::AsyncOnObject(this, [this, context, rid, method, params] {
         auto bd = getBitcoinD();
-        if (UNLIKELY(!bd)) {
+        if (!bd) [[unlikely]] {
             emit context->fail(rid, "Unable to find a good BitcoinD connection");
             return;
         }
@@ -753,7 +753,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
 
         // put context in table -- this table is consulted in handleMessageCommon to dispatch
         // the reply directly to this context object
-        if (auto it = reqContextTable.find(rid); LIKELY(it == reqContextTable.end() || it.value().expired())) {
+        if (auto it = reqContextTable.find(rid); it == reqContextTable.end() || it.value().expired()) [[likely]] {
             // does not exist in table, put in table
             context->ts = Util::getTime(); // set timestamp; used by requestTimeoutChecker()
             reqContextTable[rid] = context; // weak ref inserted into table

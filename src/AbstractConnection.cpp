@@ -189,11 +189,11 @@ bool AbstractConnection::do_write(const QByteArray & data)
     const auto n2write = data.length();
     writeBackLog += n2write;
     const qint64 written = socket->write(data);
-    if (UNLIKELY(written < 0)) {
+    if (written < 0) [[unlikely]] {
         Error() << __func__ << ": " << prettyName() << " -- error on write " << socket->error() << " (" << socket->errorString() << ")";
         do_disconnect();
         return false;
-    } else if (UNLIKELY(written < n2write)) {
+    } else if (written < n2write) [[unlikely]] {
         // This branch should never happen since QTcpSocket uses an inifinite internal write buffer and always returns
         // mmediately with the full write request's `byteswritten` as a result.  We still keep this check around,
         // however, in case some day this predicate is violated by a Qt API change.

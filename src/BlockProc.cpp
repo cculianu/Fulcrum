@@ -68,7 +68,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, const BlockHash &blockHash
                 }
             }
             // Defensive programming -- ensure that our prefix table entries didn't overflow past Rpa::MaxTxIdx
-            if (UNLIKELY(maxTxIdxSeen > Rpa::MaxTxIdx))
+            if (maxTxIdxSeen > Rpa::MaxTxIdx) [[unlikely]]
                 // This should never happen -- a block with more than 16.7 million txns!
                 throw InternalError(QString("Block %1 too many txs (%2) and has overflowed the maximum txIdx we support"
                                             " for RPA (%3). Please contact the developers and report this issue.")
@@ -131,7 +131,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, const BlockHash &blockHash
         }
 
         // Defensive programming -- we only support up to 24-bit IONum due to the database format we use.
-        if (UNLIKELY(maxOutNSeen > IONumMax)) {
+        if (maxOutNSeen > IONumMax) [[unlikely]] {
             // This should never happen -- outN larger than 16.7 million
             throw InternalError(QString("Block %1 tx %2 has outN larger than %3 (%4). This should never happen."
                                         " Please contact the developers and report this issue.")
@@ -160,7 +160,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, const BlockHash &blockHash
         }
 
         // Defensive programming -- we only support up to 24-bit IONum due to the database format we use.
-        if (UNLIKELY(maxIONumSeen > IONumMax)) {
+        if (maxIONumSeen > IONumMax) [[unlikely]] {
             // This should never happen -- outN larger than 16.7 million
             throw InternalError(QString("Block %1 tx %2 has input prevoutN larger than %3 (%4). This should never happen."
                                         " Please contact the developers and report this issue.")

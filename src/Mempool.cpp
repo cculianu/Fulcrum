@@ -95,7 +95,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
         this->txs[tx->hash] = tx; // save tx right now to map, since we need to find it later for possible spends, etc if subsequent tx's refer to this tx.
         IONum n = 0;
         const auto numTxo = ctx->vout.size();
-        if (LIKELY(tx->txos.size() != numTxo)) {
+        if (tx->txos.size() != numTxo) [[likely]] {
             // we do it this way (reserve then resize) to avoid the automatic 2^N prealloc of normal vector .resize()
             tx->txos.reserve(numTxo);
             tx->txos.resize(numTxo);
@@ -190,7 +190,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                                     // is not the case as it would indicate a bug in this code.)
                                     QString msg("%1: dsp addTx returned false for dspHash: %2, txid: %3.");
                                     msg = msg.arg(__func__, dspHash.toHex(), hash.toHex());
-                                    if (LIKELY(inNum > 0))
+                                    if (inNum > 0) [[likely]]
                                         Debug() << msg;
                                     else
                                         Warning() << msg << " This should never happen! FIXME!";
@@ -208,7 +208,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
             } else {
                 // prev is a confirmed tx
                 optTXOInfo = getTXOInfo(prevTXO); // this may also throw on low-level db error
-                if (UNLIKELY(!optTXOInfo.has_value())) {
+                if (!optTXOInfo.has_value()) [[unlikely]] {
                     // Uh oh. If it wasn't in the mempool or in the db.. something is very wrong with our code...
                     // (or there maybe was a race condition and a new block came in while we were doing this).
                     // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
@@ -274,7 +274,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
 
     // now, sort and uniqueify data structures made temporarily inconsistent above (have dupes, are out-of-order)
     for (const auto & sh : scriptHashesAffected) {
-        if (auto it = this->hashXTxs.find(sh); LIKELY(it != this->hashXTxs.end()))
+        if (auto it = this->hashXTxs.find(sh); it != this->hashXTxs.end()) [[likely]]
             Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
         //else {}
         // Note: It's possible for the scriptHashesAffected set to refer to sh's no longer in the mempool because
@@ -397,7 +397,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, TxHashS
     // first, undo unconfirmed spends -- find the parent txs and credit back the IOInfos for corresponding scripthashes
     for (const auto & txid : txids) {
         auto it = txs.find(txid);
-        if (UNLIKELY(it == txs.end())) {
+        if (it == txs.end()) [[unlikely]] {
             // Note that it's ok to call this function for non-existant tx's -- if we call it when adding new blocks
             // then it's possible for txids in blocks to not be in mempool. Only print a message in debug mode.
             DebugM("dropTxs: tx ", Util::ToHexFast(txid), " not found in mempool");
@@ -419,22 +419,22 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, TxHashS
                     continue;
                 }
                 auto prevIt = txs.find(txo.txHash);
-                if (LIKELY(prevIt != txs.end())) {
+                if (prevIt != txs.end()) [[likely]] {
                     auto & prevTx = prevIt->second;
-                    if (LIKELY(txo.outN < prevTx->txos.size())) {
+                    if (txo.outN < prevTx->txos.size()) [[likely]] {
                         auto & prevTxoInfo = prevTx->txos[txo.outN];
-                        if (UNLIKELY(txoinfo != prevTxoInfo)) {
+                        if (txoinfo != prevTxoInfo) [[unlikely]] {
                             Error() << "dropTxs: Previous out " << txo.txHash.toHex() << ":" << txo.outN << " -- "
                                     << "expected TXOInfo for this tx to match with spending tx " << txid.toHex()
                                     << "'s TXOInfo! FIXME!";
                         }
-                        if (UNLIKELY(prevTxoInfo.hashX != hashX)) {
+                        if (prevTxoInfo.hashX != hashX) [[unlikely]] {
                             Error() << "dropTxs: Previous out " << txo.txHash.toHex() << ":" << txo.outN << " -- "
                                     << "expected TXOInfo for this tx to have hashX " << hashX.toHex()
                                     << ", but it did not! FIXME!";
                         }
                         auto prevHashXsIt = prevTx->hashXs.find(hashX);
-                        if (LIKELY(prevHashXsIt != prevTx->hashXs.end())) {
+                        if (prevHashXsIt != prevTx->hashXs.end()) [[likely]] {
                             auto & previoinfo = prevHashXsIt->second;
                             // this does the actual "crediting" back of the spend to the parent tx
                             assert(txo.isValid());
@@ -525,7 +525,7 @@ size_t Mempool::rmTxRpaAssociations(const TxRef &tx)
 {
     size_t rmct = 0u;
     if (tx->optRpaPrefixSet) {
-        if (LIKELY(optPrefixTable)) {
+        if (optPrefixTable) [[likely]] {
             for (const auto & prefix : *tx->optRpaPrefixSet) {
                 rmct += optPrefixTable->removeForPrefixAndHash(prefix, tx->hash);
             }
@@ -554,12 +554,12 @@ std::size_t Mempool::rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHash
     // next, scan hashXs, removing entries for the txids in question
     for (const auto & hashX : scriptHashesAffected) {
         auto it = hashXTxs.find(hashX);
-        if (UNLIKELY(it == hashXTxs.end())) {
+        if (it == hashXTxs.end()) [[unlikely]] {
             Error() << "rmTxsInHashXTxs: Could not find scripthash " << hashX.toHex() << " in hashXTxs map! FIXME!";
             continue;
         }
         auto & txvec = it->second;
-        if (UNLIKELY(txvec.empty()))
+        if (txvec.empty()) [[unlikely]]
             Error() << "rmTxsInHashXTxs: txvec for scripthash " << hashX.toHex() << " is empty! This should never happen! FIXME!";
         std::vector<TxRef> newvec;
         newvec.reserve(txvec.size());
@@ -637,7 +637,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                     auto it2move = itUS++;  // first make `it` point to `it` + 1, making `it2move` be previous value `it`
                     // transfer node from unconfirmed spends -> confirmed spends
                     auto res = ioinfo.confirmedSpends.insert(ioinfo.unconfirmedSpends.extract(it2move)); // does not invalidate refs
-                    if (LIKELY(res.inserted)) {
+                    if (res.inserted) [[likely]] {
                         // update node data -- (confirmedHeight and txNum need to be updated for confirmed spend)
                         auto & txoinfo = res.position->second;
                         txoinfo.confirmedHeight.emplace(confirmedHeight);

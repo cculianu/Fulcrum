@@ -85,7 +85,7 @@ bool DSPs::addTx(const DspHash &dspHash, const TxHash &txHash)
     int ct = 0;
     ct += txDspsMap[txHash].insert(dsp->hash).second;
     ct += dsp->descendants.insert(txHash).second; // this is how calling code adds new descendants it learns about
-    if (UNLIKELY(ct == 1))
+    if (ct == 1) [[unlikely]]
         // this indicates a bug in this code -- invariant not maintained
         Warning() << "DSPs::addTx -- bug in code. Invariant violated: the associations in txDspsMap and dsp->descendants disagree!";
     // *** NOTE ***

@@ -385,14 +385,14 @@ void PrefixTable::lazyLoadRow(const size_t index, const ReadOnly *ro) const {
         ro = std::get_if<ReadOnly>(&var);
         if (!ro) return; // nothing to do for read-write table, return
     }
-    if (UNLIKELY(ro->rows.size() != numRows())) throw InternalError("Bad size for ro->rows(). FIXME!");
+    if (ro->rows.size() != numRows()) [[unlikely]] throw InternalError("Bad size for ro->rows(). FIXME!");
     PNV & row = ro->rows.at(index); // may throw
     if (! row.isNull()) return; // if not null, then we already been through here once, and the data is populated already (even if with a 0-sized array .isNull() will be false)
     const auto & serData = ro->serializedData;
     const auto prefixBytes = Prefix::numToBytes(index);
     static_assert(prefixBytes.size() == 2u);
     const size_t pfx0 = prefixBytes[0];
-    if (UNLIKELY(pfx0 >= ro->toc.prefix0Offsets.size()))
+    if (pfx0 >= ro->toc.prefix0Offsets.size()) [[unlikely]]
         throw InternalError(QString("PrefixTable serialized TOC has bad size, indexing position %1 but TOC size is %2. FIXME!")
                                 .arg(pfx0).arg(ro->toc.prefix0Offsets.size()));
     bitcoin::GenericVectorReader vr(0, 0, serData, ro->toc.prefix0Offsets[pfx0]); // start reading at prefix0 offset
@@ -404,7 +404,7 @@ void PrefixTable::lazyLoadRow(const size_t index, const ReadOnly *ro) const {
     }
     const auto sz = bitcoin::ReadCompactSize(vr, false);
     const size_t pos = vr.GetPos();
-    if (const auto bufsz = size_t(serData.size()); UNLIKELY(sz > bufsz || pos + sz > bufsz)) {
+    if (const auto bufsz = size_t(serData.size()); sz > bufsz || pos + sz > bufsz) [[unlikely]] {
         throw std::ios_base::failure("Bad size read from serialized data buffer when attempting to deserialize a PrefixTable row");
     }
     auto * const begin = serData.constData() + pos;

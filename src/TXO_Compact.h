@@ -104,7 +104,7 @@ struct CompactTXO {
     }
     /// passed-in bufsz must be either minSize() (for 2-byte IONum <= 65535) or maxSize() (for 3-byte IONum)!
     static CompactTXO fromBytesInPlaceExactSizeRequired(const std::byte *buf, size_t bufsz, bool bigEndian)  {
-        if (UNLIKELY(bufsz != minSize() && bufsz != maxSize()))
+        if (bufsz != minSize() && bufsz != maxSize()) [[unlikely]]
             throw InternalError(QString("CompactTXO::fromBytesInPlaceExactSizeRequired was given an invalid size: %1").arg(bufsz));
         return fromBytes(QByteArray::fromRawData(reinterpret_cast<const char *>(buf), int(bufsz)), bigEndian);
     }

@@ -37,7 +37,7 @@ Subscription::Subscription(const HashX &k)
 
 Subscription::~Subscription()
 {
-    if (const auto n = --nGlobalInstances; UNLIKELY(n < 0))
+    if (const auto n = --nGlobalInstances; n < 0) [[unlikely]]
         // should never happen
         Error() << "BUG! Subscription::nGlobalInstances (" << n << ") is negative! FIXME!";
 }
@@ -87,7 +87,7 @@ SubsMgr::SubsMgr(const std::shared_ptr<const Options> & o, Storage *s, const QSt
 }
 SubsMgr::~SubsMgr() { Debug() << __func__; cleanup(); }
 void SubsMgr::startup() {
-    if (UNLIKELY(!storage || !options))
+    if (!storage || !options) [[unlikely]]
         // paranoia
         throw BadArgs("SubsMgr constructed with nullptr for either options or storage! FIXME!");
     start();
@@ -227,7 +227,7 @@ void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &&s)
 
 void SubsMgr::unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHasher> & keys)
 {
-    if (UNLIKELY(!dynamic_cast<DSProofSubsMgr *>(this))) {
+    if (!dynamic_cast<DSProofSubsMgr *>(this)) [[unlikely]] {
         // this only is set up to work only for the DSProofsSubMgr currently. Print error to log and return.
         Error() << "INTERNAL ERROR: " << " currently " << __func__ << " is only supported for the DSProofSubsMgr. FIXME!";
         return;
@@ -285,7 +285,7 @@ bool SubsMgr::isSubsLimitExceeded(int64_t & limit) const {
 // may throw LimitReached
 auto SubsMgr::getOrMakeSubRef(const HashX &key) -> std::pair<SubRef, bool>
 {
-    if (int64_t limit; UNLIKELY(isSubsLimitExceeded(limit)))
+    if (int64_t limit; isSubsLimitExceeded(limit)) [[unlikely]]
         // Note we check the limit against all subs (including zombies) to prevent a DoS attack that circumvents
         // the limit by repeatedly creating subs, disconnecting, reconnecting, creating a different set of subs, etc.
         throw LimitReached(QString("Subs limit of %1 has been reached").arg(limit));
@@ -317,7 +317,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCa
 {
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
     const bool useCache = useStatusCache();
-    if (UNLIKELY(!notifyCB))
+    if (!notifyCB) [[unlikely]]
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
 
     SubscribeResult ret = { false, {} };
@@ -342,7 +342,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCa
                 //Debug() << "client id " << id << " destroyed, implicitly unsubbed from " << sub->key.toHex()
                 //        << ", " << sub->subscribedClientIds.size() << " sub(s) remain";
             });
-            if (UNLIKELY(!conn))
+            if (!conn) [[unlikely]]
                 throw InternalError("SubsMgr::subscribe: Failed to make the 'destroyed' connection for the client object! FIXME!");
             ++p->nClientSubsActive;
             ++Pvt::nGlobalClientSubsActive;
@@ -354,7 +354,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCa
         }
         sub->updateTS(); // our basic 'mtime'
         auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
-        if (UNLIKELY(!conn))
+        if (!conn) [[unlikely]]
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
     }
 
@@ -387,11 +387,11 @@ auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const S
                 // just call unsubscribe. this will zombify this sub and it will be deleted
                 unsubscribe(c, key, false /* don't update ts */);
             });
-            if (UNLIKELY(!conn)) {
+            if (!conn) [[unlikely]] {
                 // this should never happen
                 Error() << "INTERNAL ERROR: failed to make the connecttion to the 'unsubscribeRequested' signal for client " << c->id << ". FIXME!";
             }
-        } else {
+        } else [[unlikely]] {
             // should never happen
             Error() << "INTERNAL ERROR: sub immediately lost its subref for " << key.toHex() << ". FIXME!";
         }
@@ -480,7 +480,7 @@ inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
     for (const auto & item : hist) {
         constexpr size_t BufSize = WorstCaseElementSize + 10; // leave a little room (this happens to align sbuf to cache on 64-bit)
         Util::AsyncSignalSafe::SBuf<BufSize> sbuf; // fast stack-based buffer
-        if (const auto hexLen = item.hash.length() * 2; LIKELY(hexLen <= HashLen * 2)) {
+        if (const auto hexLen = item.hash.length() * 2; hexLen <= HashLen * 2) [[likely]] {
             Util::ToHexFastInPlace(item.hash, sbuf.strBuf.data(), hexLen);
             sbuf.len += hexLen;
         }
@@ -522,7 +522,7 @@ void SubsMgr::removeZombies(bool forced)
     const auto total = p->subs.size();
     for (auto it = p->subs.begin(); it != p->subs.end(); /* */) {
         SubRef sub = it->second; // take a copy to increment refct so it doesn't get deleted before we unlock it (erase() below)...
-        if (UNLIKELY(!sub)) { // paranoia
+        if (!sub) [[unlikely]] { // paranoia
             Fatal() << "A SubRef was null in " << __func__ << ". FIXME!";
             return;
         }
