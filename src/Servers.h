@@ -25,6 +25,7 @@
 #include "RollingBloomFilter.h"
 #include "Rpa.h"
 #include "RPC.h"
+#include "ServerMisc.h"
 #include "Version.h"
 
 #include <QHash>
@@ -649,7 +650,7 @@ public:
         QString userAgent = "Unknown"; //< the exact useragent string as the client sent us.
         /// may be 0,0,0 if we were unable to parse the above string. Used to detect old EC versions and send them an error string on broadcast to warn them to upgrade.
         inline Version uaVersion() const { return Version(userAgent); }
-        Version protocolVersion = {1,4,0}; ///< defaults to 1,4,0 if client says nothing.
+        Version protocolVersion = ServerMisc::MinProtocolVersion; ///< defaults to the minimum server version if client says nothing
         bool alreadySentVersion = false;
         unsigned nTxSent = 0u, nTxBroadcastErrors = 0u;
         size_t nTxBytesSent = 0u;
