@@ -2998,7 +2998,7 @@ void AdminServer::rpc_addpeer(Client *c, const RPC::BatchId batchId, const RPC::
 
     if (!pi.ssl && !pi.tcp)
         throw RPCError("Must specify at least one TCP or SSL port");
-    emit gotRpcAddPeer(PeerInfoList{pi}, QHostAddress());
+    emit gotRpcAddPeer(PeerInfoList({pi}), QHostAddress());
     emit c->sendResult(batchId, m.id, true);
 }
 void AdminServer::rpc_ban(Client *c, const RPC::BatchId batchId, const RPC::Message &m)

@@ -56,9 +56,8 @@ public:
                             kProcessSoonInterval = 1.0, ///< "processSoon" means in 1 second
                             kFailureRetryTime = 10. * 60., ///< the amount of time to wait before retrying failed servers (10 mins)
                             kBadPeerRetryTime = 60. * 60., ///< the amount of time to wait before retrying bad peers (60 mins)
-                            kConnectedPeerRefreshInterval = 30. * 60., ///< we keep "refreshing" from connected peers at this interval (30 mins) to make sure they are still good, and to pick up new peers from them
-                            kConnectedPeerPingTime = 5. * 60., ///< we send server.ping to connected peers every 5 mins. This value should always be lower than kConnectedPeerRefreshInterval.
-                            kExpireFailedPeersTime = 24. * 60. * 60.; ///< we expire non-seed peers that are in the "bad" or "failed" status after 24 hours. (see PeerInfo::failureTs)
+                            kGoodPeerRefreshInterval = 10. * 60., ///< we keep refreshing known-good peers at this interval (10 mins) to make sure they are still good, and to pick up new peers from them
+                            kExpireFailedPeersTime = 24. * 60. * 60; ///< we expire non-seed peers that are in the "bad" or "failed" status after 24 hours. (see PeerInfo::failureTs)
 
     /// Used by PeerClient instances to compare the remote server's genesis hash to our own.
     QByteArray genesisHash() const { return _genesisHash; }
@@ -97,15 +96,13 @@ signals:
     /// Emitted to notify Server instances of a new peers list.  Connected to the onPeersUpdated slot in all extant Server instances.
     void updated(const PeerInfoList &);
 
-    /// internal signal -- connected to this->updateSoon
-    void needUpdateSoon();
-
 protected:
     void on_started() override;
     void process() override;
     Stats stats() const override;
 
 protected slots:
+    void on_good(PeerClient *);
     void on_bad(PeerClient *);
     void on_connectFailed(PeerClient *);
 private:
@@ -130,10 +127,13 @@ private:
     void processSoon();
     void updateSoon();
     void retryFailedPeers(bool useBadMapInstead = false);
+    void refreshGoodPeers();
     void detectProtocol(const QHostAddress &);
     PeerClient *newClient(const PeerInfo &);
 
     PeerInfoMap queued, bad, failed;
+    /// The subset of peers that passed verification. The updated() signal's argument is populated from this map's values.
+    PeerInfoMap good;
 
     bool gotAllServersStartedSignal = false;
 
@@ -168,17 +168,29 @@ struct PeerInfo
     /// kExpireFailedPeersTime will be purged completely from all data structures. Only has_value for 'failed' or 'bad'
     /// peers, or peers that just came off the 'failed' or 'bad' lists but haven't yet been verified good.
     std::optional<double> failureTs;
+    /// The timestamp of when this Peer entered the "good" status. These 'good' timestamps and failureTs are mutually
+    /// exclusive. Peers that have lastGoodTs for >= kGoodPeerRefreshInterval end up being periodically "refreshed"
+    /// (re-connected-to) to ensure they are still good.
+    std::optional<double> firstGoodTs, lastGoodTs;
 
     void clear() { *this = PeerInfo(); }
     bool isTor() const { return hostName.endsWith(".onion", Qt::CaseInsensitive); }
     /// minimal checking that hostname is not empty and that at least an ssl or a tcp port are defined.
     bool isMinimallyValid() const { return !hostName.isEmpty() && (ssl || tcp) && hashFunction == ServerMisc::HashFunction; }
     /// only sets the failureTs if missing, otherwise does nothing.
-    void setFailureTsIfNotSet() { if (!failureTs.has_value()) failureTs = Util::getTimeSecs(); }
+    void setFailureTsIfNotSet() { if (!failureTs.has_value()) failureTs = Util::getTimeSecs(); firstGoodTs.reset(); lastGoodTs.reset(); }
     /// reset the failure Ts
-    void clearFailureTs() { failureTs.reset(); }
+    void setGoodTs() { failureTs.reset(); lastGoodTs = Util::getTimeSecs(); if (!firstGoodTs) firstGoodTs = lastGoodTs; }
     /// returns the age of the failureTs in seconds, if set, or an empty optional otherwise
     std::optional<double> failureAge() const { return failureTs.has_value() ? Util::getTimeSecs() - *failureTs : std::optional<double>{}; }
+    /// returns the age of the lastGoodTs in seconds, if set, or an empty optional otherwise
+    std::optional<double> lastGoodAge() const { return lastGoodTs.has_value() ? Util::getTimeSecs() - *lastGoodTs : std::optional<double>{}; }
+    std::optional<double> firstGoodAge() const { return firstGoodTs.has_value() ? Util::getTimeSecs() - *firstGoodTs : std::optional<double>{}; }
+    /// returns true if lastGoodAge() has_value and if lastGoodAge() is sufficiently old so as to need a refresh
+    bool isGoodServerNeedingRefresh() const {
+        auto optAge = lastGoodAge();
+        return optAge && *optAge >= PeerMgr::kGoodPeerRefreshInterval;
+    }
 
     /// Pass it the "features" map as returned by server.features. Normally only one PeerInfo will be returned, but
     /// there may be multiple in the case of .onion in the 'hosts' sub-map.  All of the hosts returned have identical
@@ -205,10 +217,8 @@ public:
 
     void connectToPeer();
 
-    bool sentVersion = false;
     std::optional<PeerMgr::HeightHeaderPair> headerToVerify;
     bool verified = false;
-    double lastRefreshTs = 0.;
     bool wasKicked = false; ///< used by the 'kick' code to tell the rest of the system to NOT re-enqueue this peer after disconnect
 
     const bool announceSelf;
@@ -217,6 +227,8 @@ public:
 signals:
     /// connected to PeerMgr::on_bad
     void bad(PeerClient *me);
+    /// connected to PeerMgr::on_good
+    void good(PeerClient *me);
     /// connected to PeerMgr::on_connectFailed
     void connectFailed(PeerClient *me);
     /// connected to PeerMgr::on_rpcAddPeer
@@ -234,12 +246,15 @@ protected:
 
     PeerMgr *mgr;
 private:
-    void refresh();
     /// Updates the updateable fields in this->info from the remote "features" response
     void updateInfoFromRemoteFeaturesMap(const PeerInfo &);
 
     static constexpr int kConnectTimeoutMS = 30'000; ///< If we fail to establish a TCP connection in this time (msec), give up.
     static constexpr auto kConnectTimerName = "+ConnectionTimeoutTimer";
+    static constexpr int kVerifiedPeerWaitForAddPeerReplyTime = 10'000; ///< amount of time after a peer enters "verified" status, to wait for the add_peer reply
+    static constexpr auto kVerifiedPeerWaitForAddPeerReplyTimerName = "+WaitForAddPeerTimer";
+    static constexpr int kGracefulDisconnectTime = 2'000; ///< when disconnecting gracefully, wait this amount of time before calling deleteLater()
+    static constexpr auto kGracefulDisconnectTimerName = "+GracefulDisconnectTimer";
 };
 
 Q_DECLARE_METATYPE(PeerInfo);

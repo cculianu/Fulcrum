@@ -33,13 +33,15 @@
 #include <QTcpSocket>
 #include <QVector>
 
-#include <limits>
+#include <algorithm>
 #include <list>
+#include <memory>
 #include <utility>
 
 namespace {
     constexpr int kStringMax = 80, kHostNameMax = 120;
     constexpr bool debugPrint = false;
+    bool isValidPort(unsigned port) { return port != 0u && std::in_range<quint16>(port); }
 }
 
 PeerMgr::PeerMgr(const SrvMgr *sm, const std::shared_ptr<Storage> &storage_ , const std::shared_ptr<const Options> &options_)
@@ -160,10 +162,10 @@ void PeerMgr::parseServersDotJson(const QString &fnIn)
         }
         bool ok;
         unsigned val = d.value("s", 0).toUInt(&ok);
-        if (ok && val && val <= std::numeric_limits<quint16>::max())
+        if (ok && isValidPort(val))
             info.ssl = quint16(val);
         val = d.value("t", 0).toUInt(&ok);
-        if (ok && val && val <= std::numeric_limits<quint16>::max())
+        if (ok && isValidPort(val))
             info.tcp = quint16(val);
         info.protocolVersion = d.value("version", ServerMisc::MinProtocolVersion.toString()).toString();
         if (!info.isMinimallyValid()) {
@@ -185,7 +187,6 @@ void PeerMgr::on_started()
 {
     ThreadObjectMixin::on_started();
     Debug() << objectName() << ": started ok";
-    conns += connect(this, &PeerMgr::needUpdateSoon, this, &PeerMgr::updateSoon);
     chan.put("ok");
 }
 
@@ -194,6 +195,13 @@ void PeerMgr::cleanup()
     stop();
     if (auto num = stopAllTimers(); num)
         Debug() << objectName() << " stopped " << num << " active timers";
+    // Clean up all clients by deleting them immediately, unconditionally
+    auto clientList = clients.values();
+    clients.clear();
+    for (PeerClient *c : clientList) {
+        disconnect(c, &QObject::destroyed, this, nullptr); // must kill the 'destroyed' signal to avoid potential issues
+        delete c; // insta-kill
+    }
 }
 
 void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &source)
@@ -204,15 +212,17 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
     detectProtocol(source);
 
     for (const auto & pi : infos) {
-        // TODO here also check the "good" connections we actively have, and if in there, maybe bump server to refresh its features,
-        // then exit loop early. Also we need a way to keep track of "recently verified bad" as a DoS defense here? Hmm...
-        if (queued.contains(pi.hostName) || clients.contains(pi.hostName)) { // NB: assumption here is hostName is already trimmed and toLower()
+        // TODO here also check the "good" peers & connections we actively have, and if in there, maybe bump server to
+        // refresh its features, then exit loop early. Also we need a way to keep track of "recently verified bad" as a
+        // DoS defense here? Hmm...
+        // NB: assumption here is pi.hostName is already trimmed and toLower()
+        if (queued.contains(pi.hostName) || clients.contains(pi.hostName) || (good.contains(pi.hostName) && !pi.isGoodServerNeedingRefresh())) {
             // already added... no need to do DNS lookup or any further processing
             if constexpr (debugPrint) DebugM("add_peer: ", pi.hostName, " already queued or in process");
             continue;
         } else if (source.isNull() && (failed.contains(pi.hostName) || bad.contains(pi.hostName))) {
-            // source was not the server itself, so we ignore this request since it may have come from a server.peers.subscribe
-            // and may be stale.  We will retry failed servers ourselves eventually...
+            // source was not the server itself, so we ignore this request since it may have come from a
+            // server.peers.subscribe and may be stale.  We will retry failed servers ourselves eventually...
 
             // TODO FIXME: we are optimistically going to update the ports on failed/bad with the new ports that came in
             // as a hack to support servers changing ports and our detecting that change and eventually being able to
@@ -223,7 +233,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
                     it.value().ssl = pi.ssl;
                 }
             }
-            if constexpr (debugPrint) DebugM("add_peer: ", pi.hostName, " was already deemed bad/failed, skipping");
+            if constexpr (debugPrint) DebugM("add_peer: ", pi.hostName, " was already deemed bad/failed, skipping (for now)");
             continue;
         }
         if (pi.isTor()) {
@@ -239,7 +249,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
         // For each peer in the list, do a DNS lookup and verify that the source address matches at least one
         // of the resolved addresses.  If that is the case, we can proceed with the peer add (addPeerVerifiedSource).
         // Otherwise, we reject add_peer requests from random sources.
-        std::shared_ptr<std::optional<int>> lookupId = std::make_shared<decltype(lookupId)::element_type>();
+        auto lookupId = std::make_shared<std::optional<int>>();
         *lookupId = QHostInfo::lookupHost(pi.hostName, this, [this, pi, source, lookupId](const QHostInfo &result){
             lookupId->reset(); // signify we no longer need a cancellation .. calls reset on the std::optional (not on the shared_ptr)
             if (result.error() != QHostInfo::NoError) {
@@ -281,16 +291,16 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
                    skipped ? " (some of the resolved addresses were skipped due us lacking the capability to connect"
                              " to their advertised IP protocol)" : "");
         });
-        QTimer::singleShot(int(kDNSTimeout*1e3), this, [this, lookupId, pi] {
+        Util::AsyncOnObject(this, [this, lookupId, pi] {
             if (lookupId->has_value()) {
-                QHostInfo::abortHostLookup(lookupId->value());
+                QHostInfo::abortHostLookup(**lookupId);
                 PeerInfo & p2 = failed[pi.hostName] = pi;
                 p2.failureReason = "DNS timed out";
                 p2.setFailureTsIfNotSet();
                 DebugM("add_peer: hostname lookup for ", pi.hostName, " timed out after ",
                        QString::number(kDNSTimeout, 'f', 1), " secs");
             }
-        });
+        }, static_cast<int>(kDNSTimeout * 1e3));
     }
 }
 
@@ -340,33 +350,38 @@ void PeerMgr::on_allServersStarted()
 
     processSoon();
 
-    // next, set up the "failed retry time" which runs every kFailureRetryTime seconds (10 mins)
+    // next, set up the "failed peer retry" timer which runs every kFailureRetryTime seconds (10 mins)
     callOnTimerSoon(int(kFailureRetryTime*1e3), "failedPeerRetry", [this]{
         retryFailedPeers();
         return true;
     });
-    // next, set up the "bad retry time" which runs every kBadPeerRetryTime seconds (60 mins)
+    // next, set up the "bad peer retry" timer which runs every kBadPeerRetryTime seconds (60 mins)
     callOnTimerSoon(int(kBadPeerRetryTime*1e3), "badPeerRetry", [this]{
         retryFailedPeers(true);
+        return true;
+    });
+    // lastly, set up the "good peer refresh" timer which runs every kGoodPeerRefreshInterval minute, or at half the kGoodPeerRefreshInterval, whichever is smaller
+    callOnTimerSoon(std::min<int>(60'000, kGoodPeerRefreshInterval*0.5*1e3), "goodPeerRefresh", [this]{
+        refreshGoodPeers();
         return true;
     });
 }
 
 namespace {
-    QString failureHoursString(const PeerInfo &info) {
+    QString ageHoursString(const std::optional<double> &age) {
         QString ret;
-        if (const auto fa = info.failureAge(); fa.has_value())
-            ret = QString::number(*fa / (60.*60.), 'f', 2) + " hours";
+        if (age.has_value())
+            ret = QString::number(*age / (60.*60.), 'f', 2) + " hours";
         return ret;
     }
 }
 
 void PeerMgr::retryFailedPeers(bool useBadMap)
 {
-    int ctr = 0;
+    size_t ctr = 0;
     auto & failed = (useBadMap ? this->bad : this->failed);
     for (const auto & pi : failed) {
-        if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName)) {
+        if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName) && !good.contains(pi.hostName)) {
             if (auto fa = pi.failureAge(); fa.has_value() && *fa > kExpireFailedPeersTime && !seedPeers.contains(pi.hostName)) {
                 // We purge peers that have been bad or failed for >24 hours. However we never purge seedPeers since
                 // they are our lifeline to the outside world.  It's possible ALL peers can be failed/bad for a long
@@ -377,7 +392,7 @@ void PeerMgr::retryFailedPeers(bool useBadMap)
                 // optimization to not waste memory on defunct peers and is not a requirement for correctness.
                 // Keeping the seedPeers around indefinitely even if 'failed' does very little harm since the seedPeer
                 // list is bounded and small, and it does good (in the case of an extended connectivity outage).
-                Log() << "Purging failed peer " << pi.hostName << " because it has been unavailable for " <<  failureHoursString(pi);
+                Log() << "Purging failed peer " << pi.hostName << " because it has been unavailable for " <<  ageHoursString(pi.failureAge());
                 continue;
             }
             auto it = queued.insert(pi.hostName, pi);
@@ -393,6 +408,28 @@ void PeerMgr::retryFailedPeers(bool useBadMap)
     }
 }
 
+void PeerMgr::refreshGoodPeers()
+{
+    if constexpr (debugPrint) Debug() << __func__ << " wakeup ...";
+    size_t ctr = 0;
+    for (const auto & pi : std::as_const(good)) {
+        if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName)) {
+            if (pi.isGoodServerNeedingRefresh()) {
+                // refresh this good peer after 10 mins to pick up new information from it, ensure it's good, etc
+                DebugM("Enqueuing good peer ", pi.hostName, " (last good age: ", QString::number(pi.lastGoodAge().value_or(-1.), 'f', 1),
+                       " seconds) for refresh");
+                auto it = queued.insert(pi.hostName, pi);
+                it.value().addr.clear(); // make sure addr is null so we do lookup again in case peer IP address has changed
+                ++ctr;
+            }
+        }
+    }
+    if (ctr) {
+        DebugM("Refreshing ", ctr, " ", "'good'" , Util::Pluralize(" peer", ctr), " ...");
+        processSoon();
+    }
+}
+
 void PeerMgr::processSoon()
 {
     callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{process();});
@@ -402,12 +439,11 @@ void PeerMgr::updateSoon()
 {
     callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{
         // the below happens in a rate-limited fashion after a small delay (currently 1 sec)
-        PeerInfoList peers;
-        for (const auto & client : std::as_const(clients)) {
-            if (client->isGood() && !client->isStale() && client->verified)
-                peers.push_back(client->info);
+        const PeerInfoList goodPeers = good.values();
+        if constexpr (debugPrint) {
+            DebugM("emitting updated() signal for peers: ", good.keys().join(", "));
         }
-        emit updated(peers);
+        emit updated(goodPeers);
     });
 }
 
@@ -415,11 +451,11 @@ void PeerMgr::process()
 {
     if (queued.isEmpty())
         return;
-    PeerInfo pi = queued.take(queued.begin().key());
+    const PeerInfo pi = queued.take(queued.begin().key());
     if (const bool isTor = pi.isTor(); pi.addr.isNull() && !isTor) {
         if constexpr (debugPrint)
             DebugM("PeerInfo.addr was null for ", pi.hostName, ", calling on_rpcAddPeer to resolve address");
-        on_rpcAddPeer(PeerInfoList{pi}, pi.addr);
+        on_rpcAddPeer(PeerInfoList({pi}), pi.addr);
     } else if (!isTor && srvmgr->isIPBanned(pi.addr, false)) {
         DebugM("peer IP address ", pi.addr.toString(), " is banned, ignoring peer");
     } else if (srvmgr->isPeerHostNameBanned(pi.hostName)) {
@@ -446,24 +482,25 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
     }
     client = new PeerClient(options->peerAnnounceSelf, pi, newId(), this, 256*1024);
     connect(client, &PeerClient::connectFailed, this, &PeerMgr::on_connectFailed);
+    connect(client, &PeerClient::good, this, &PeerMgr::on_good);
     connect(client, &PeerClient::bad, this, &PeerMgr::on_bad);
     connect(client, &PeerClient::gotPeersSubscribeReply, this, &PeerMgr::on_rpcAddPeer);
     connect(client, &QObject::destroyed, this, [this, hostName = pi.hostName, addr = pi.addr](QObject *obj) {
-        auto client = clients.value(hostName, nullptr);
-        if (client == obj) {
-            clients.remove(hostName);
+        if (const auto it = std::as_const(clients).find(hostName); it != clients.end() && it.value() == obj) {
+            clients.erase(it);
             peerIPAddrs.remove(addr); // mark it as gone from the set
             updateSoon();
-            if constexpr (debugPrint) DebugM("Removed peer from map: ", hostName);
+            if constexpr (debugPrint) DebugM("Removed peer from clients map: ", hostName);
         } else {
-            if constexpr (debugPrint) DebugM("Peer not found in map: ", hostName);
+            if constexpr (debugPrint) DebugM("Peer not found in clients map: ", hostName);
         }
     });
     connect(client, &PeerClient::lostConnection, this, [](AbstractConnection *c){
+        assert(c != nullptr);
         PeerClient *client = dynamic_cast<PeerClient *>(c);
         DebugM((client ? client->info.hostName : QString{"???"}), ": Socket disconnect");
-        if (client && client->verified) {
-            Log() << "Peer " << client->info.hostName << " connection lost";
+        if (client && !client->verified) {
+            Log() << "Failed to verify peer " << client->info.hostName << " (" << client->info.addr.toString() << ")";
         }
         c->deleteLater();
     });
@@ -479,20 +516,40 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
     return client;
 }
 
+void PeerMgr::on_good(PeerClient *c)
+{
+    const auto &hostName = c->info.hostName;
+    if (hostName.isEmpty()) [[unlikely]] {
+        Warning() << "Client " << c->id << " has an empty hostname! This should never happen! FIXME!";
+        return;
+    }
+    c->info.setGoodTs();
+    good[hostName] = c->info;
+    bad.remove(hostName);
+    failed.remove(hostName);
+    updateSoon();
+    // NB: we don't disconnect right away since maybe client needs to send server.add_peer
+}
+
 void PeerMgr::on_bad(PeerClient *c)
 {
-    if (c->info.hostName.isEmpty())
+    const auto &hostName = c->info.hostName;
+    if (hostName.isEmpty())
         return;
     c->info.setFailureTsIfNotSet();
     c->info.genesisHash.clear();
-    if (!c->wasKicked)
-        bad[c->info.hostName] = c->info;
+    if (!c->wasKicked) {
+        good.remove(hostName);
+        bad[hostName] = c->info;
+    }
     c->deleteLater(); // drop connection
+    updateSoon();
 }
 
 void PeerMgr::on_connectFailed(PeerClient *c)
 {
-    if (c->info.hostName.isEmpty())
+    const auto &hostName = c->info.hostName;
+    if (hostName.isEmpty())
         return;
     if (c->info.failureReason.startsWith("!!")) {
         c->info.failureReason = c->info.failureReason.mid(2); // pick up reason override (timed-out connections override the reason)
@@ -506,9 +563,12 @@ void PeerMgr::on_connectFailed(PeerClient *c)
     }
     c->info.setFailureTsIfNotSet();
     c->info.genesisHash.clear();
-    if (!c->wasKicked)
-        failed[c->info.hostName] = c->info;
+    if (!c->wasKicked) {
+        good.remove(hostName);
+        failed[hostName] = c->info;
+    }
     c->deleteLater(); // clean up
+    updateSoon();
 }
 
 
@@ -518,7 +578,7 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
         return;
     QSet<QString> hostnames;
     // first, loop through all the inactive maps and search for this addr
-    for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
+    for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed, &good} ) {
         for (auto it = m->begin(); it != m->end() ; /**/) {
             if (it->addr == addr) {
                 DebugM(__func__, " removing peer ", it.key(), " ", addr.toString());
@@ -548,7 +608,7 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
     // NB: the suffix comes in pre-normalized from SrvMgr.
     QSet<QString> hostnames;
     // first, loop through all the inactive maps and search for this addr
-    for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
+    for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed, &good} ) {
         for (auto it = m->begin(); it != m->end() ; /**/) {
             if (it->hostName.endsWith(suffix)) {
                 DebugM(__func__, " removing peer ", it.key(), " ", it->hostName);
@@ -577,22 +637,40 @@ auto PeerMgr::stats() const -> Stats
     QVariantMap m0;
     for (const auto & client : clients)
         m0[client->info.hostName] = client->stats();
+    ret["verifying"] = m0;
+
+    // NB: FulcrumAdmin script expects the good peers to live under the "peers" key
+    m0.clear();
+    for (const auto & pi : good) {
+        auto m1 = pi.toStatsMap();
+        // FulcrumAdmin script expects this to exist here for verified peers, if this is false it will print "Verifying"
+        // for the peer, otherwise it will print "Good" if true.
+        m1["verified"] = not clients.contains(pi.hostName);
+        // FulcrumAdmin also expects this key here to indicate how long it's been "good"
+        m1["connectedTime"] = pi.firstGoodAge().value_or(0.);
+
+        m0[pi.hostName] = std::move(m1);
+    }
     ret["peers"] = m0;
+
     m0.clear();
     for (const auto & info : bad) {
-        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), failureHoursString(info), info.failureReason };
+        m0[info.hostName] = QVariantList{{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), ageHoursString(info.failureAge()), info.failureReason }};
     }
     ret["bad"] = m0;
+
     m0.clear();
     for (const auto & info : queued) {
-        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), failureHoursString(info), info.failureReason };
+        m0[info.hostName] = QVariantList{{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), ageHoursString(info.failureAge()), info.failureReason }};
     }
     ret["queued"] = m0;
+
     m0.clear();
     for (const auto & info : failed) {
-        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), failureHoursString(info), info.failureReason };
+        m0[info.hostName] = QVariantList{{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), ageHoursString(info.failureAge()), info.failureReason }};
     }
     ret["failed"] = m0;
+
     ret["peering"] = options->peerDiscovery;
     ret["announce"] = options->peerAnnounceSelf;
     ret["activeTimers"] = activeTimerMapForStats();
@@ -613,6 +691,12 @@ QVariantMap PeerInfo::toStatsMap() const
     m["tcp_port"] = tcp;
     m["ssl_port"] = ssl;
     m["isTor?"] = isTor();
+    if (const auto s = ageHoursString(firstGoodAge()); !s.isEmpty())
+        m["firstGoodAge"] = s;
+    if (const auto s = ageHoursString(lastGoodAge()); !s.isEmpty())
+        m["lastGoodAge"] = s;
+    if (const auto s = ageHoursString(failureAge()); !s.isEmpty())
+        m["failureAge"] = s;
     return m;
 }
 
@@ -620,8 +704,6 @@ auto PeerClient::stats() const -> Stats
 {
     QVariantMap m = RPC::ElectrumConnection::stats().toMap();
     Compat::MapUnite(m, info.toStatsMap());
-    if (const auto s = failureHoursString(info); !s.isEmpty())
-        m["failureAge"] = s;
     m["verified"] = verified;
     return m;
 }
@@ -653,10 +735,9 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
 {
     setObjectName(QStringLiteral("Peer %1").arg(pi.hostName));
 
-    constexpr int kPingtimeMS = int(PeerMgr::kConnectedPeerPingTime * 1000.); ///< ping peer servers every 5 minutes to make sure connection is good and to avoid them disconnecting us for being idle.
-    pingtime_ms = kPingtimeMS;
-    stale_threshold = kPingtimeMS * 2;
-
+   constexpr int kStaleThresholdMS = 30'000; ///< if a peer hasn't responded at all to a request in 30 seconds, consider it "stale"
+   this->pingtime_ms = kStaleThresholdMS / 2; // member of AbstractConnection base class
+   this->stale_threshold = kStaleThresholdMS; // member of AbstractConnection base class
     if (pi.tcp) { // prefer tcp -- it's faster
         socket = new QTcpSocket(this);
     } else if (pi.ssl) {
@@ -737,48 +818,47 @@ void PeerClient::connectToPeer()
     }, true);
 }
 
-void PeerClient::do_disconnect([[maybe_unused]] bool graceful)
+void PeerClient::do_disconnect(bool graceful)
 {
-    RPC::ElectrumConnection::do_disconnect(false);
-    deleteLater();
+    RPC::ElectrumConnection::do_disconnect(graceful);
+    if (graceful)
+        // 2 second grace period to gracefully disconnect otherwise force-delete this insance
+        callOnTimerSoonNoRepeat(kGracefulDisconnectTime, kGracefulDisconnectTimerName, [this]{ deleteLater(); });
+    else
+        // non-graceful disconnect -- kill us asap
+        deleteLater();
+}
+
+void PeerClient::do_ping()
+{
+    // Note, we don't actually do any pings. We just use the built-in "ping" mechanism to detect a stale socket
+    // (peer hasn't responded to queries in a while), and if so, we maybe mark the peer as bad and disconnect from it.
+    if (isStale()) {
+        if (!verified) {
+            Log() << info.hostName << ": Connection is stale, marking peer as bad";
+            info.failureReason = "!!Timed out waiting for a reply";
+            emit bad(this);
+        } else {
+            DebugM(info.hostName, ": Connection is stale, but peer is already verified, disconnecting");
+            do_disconnect(true);
+        }
+    }
 }
 
 void PeerClient::on_connected()
 {
     RPC::ElectrumConnection::on_connected();
     emit connectionEstablished(this);
-    // refresh immediately upon connection
-    refresh();
-}
-
-void PeerClient::do_ping()
-{
-    if (Util::getTimeSecs() - lastRefreshTs >= PeerMgr::kConnectedPeerRefreshInterval) {
-        // refresh after kConnectedPeerRefreshInterval (30 mins)
-        refresh();
-    } else {
-        // otherwise ping every 5 mins to keep connection alive and detect staleness
-        if constexpr (debugPrint) DebugM(info.hostName, ": pinging ... ");
-        emit sendRequest(newId(), "server.ping");
-    }
-}
-
-void PeerClient::refresh()
-{
-    lastRefreshTs = Util::getTimeSecs();
+    // query peer immediately upon connection
     DebugM("Querying peer ", info.hostName);
-    if (!sentVersion) {
-        // this kicks off the chain of handleReply below which is really a simple state machine
-        emit sendRequest(newId(), "server.version", QVariantList{ServerMisc::AppSubVersion,
-                                                                 // EX protocol expects this form for servers doing peering
-                                                                 QVariantList{ServerMisc::MinProtocolVersion.toString(),
-                                                                              ServerMisc::MaxProtocolVersion.toString() }});
-        sentVersion = true;
-    } else {
-        // we already sent version -- kick off the state machine from its second state
-        emit sendRequest(newId(), "server.features");
-    }
-
+    // this kicks off the chain of handleReply below which is really a simple state machine
+    emit sendRequest(newId(), "server.version",
+                     QVariantList(
+                          // Arg 1
+                         {ServerMisc::AppSubVersion,
+                          // Arg 2: A tuple of [min, max]; Electrum Cash protocol expects this form for servers doing peering
+                          QVariantList({ServerMisc::MinProtocolVersion.toString(), ServerMisc::MaxProtocolVersion.toString()})}
+                     ));
 }
 
 void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message & reply)
@@ -794,9 +874,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
         Bad();
         return;
     }
-    if (reply.method == "server.ping") {
-        if constexpr (debugPrint) DebugM(info.hostName, ": ping reply.");
-    } else if (reply.method == "server.version") {
+    if (reply.method == "server.version") {
         QVariantList l = reply.result().toList();
         if (l.size() != 2) {
             Bad("Bad response to server.version");
@@ -860,7 +938,6 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
             Bad("Cannot find an entry in 'features' that matches the same hostname AND that is also advertising the port we are connected to");
             return;
         }
-        emit mgr->needUpdateSoon(); // tell mgr info may have been updated so it can rebuild its list
         headerToVerify = mgr->headerToVerifyWithPeer();
         if (headerToVerify.has_value()) [[likely]] {
             // this is the likely branch -- verify that this peer is not on a different chain such as BSV, etc
@@ -888,9 +965,6 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
         headerToVerify.reset(); // clear the optional now to release the header's memory
         // go on to next phase, get its peers.subscribe list
         emit sendRequest(newId(), "server.peers.subscribe");
-    } else if (reply.method == "server.add_peer") {
-        // handle
-        if constexpr (debugPrint) DebugM(info.hostName, ": add_peer... result = ", reply.result().toBool());
     } else if (reply.method == "server.peers.subscribe") {
         // handle
         if constexpr (debugPrint) {
@@ -907,6 +981,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
         }
         // tell peermgr about some new candidates (note peermgr filters out already-added or candidates that may be dupes, etc).
         emit gotPeersSubscribeReply(candidates, QHostAddress());
+        bool waitForAddPeerReply = false;
         if (announceSelf) {
             bool foundMe = false;
             const QString phn = mgr->publicHostNameForConnection(this);
@@ -917,15 +992,34 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
                 }
             }
             if (!foundMe) {
+                waitForAddPeerReply = true;
                 emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
             }
         }
         if (!verified) {
             verified = true;
-            info.clearFailureTs(); // make sure all failure timestamps are cleared
-            emit mgr->needUpdateSoon();
+            emit good(this); // updates peermgr good map, sets the goodTs, etc
             Log() << "Verified peer " << info.hostName << " (" << info.addr.toString() << ")";
+            // Handle disconnecting. Note that older Fulcrum versions never disconnect explicitly. This was added
+            // at the behest of the ElectrumX devs to not eat up connection slots idling.
+            if (waitForAddPeerReply) {
+                if constexpr (debugPrint) DebugM(info.hostName, ": will wait ", kVerifiedPeerWaitForAddPeerReplyTime, " msec for server.add_peer reply ...");
+                callOnTimerSoonNoRepeat(kVerifiedPeerWaitForAddPeerReplyTime, kVerifiedPeerWaitForAddPeerReplyTimerName, [this]{
+                    do_disconnect(/* graceful = */ false);
+                });
+            } else {
+                if constexpr (debugPrint) DebugM(info.hostName, ": will disconnect ASAP");
+                do_disconnect(/* graceful = */ true);
+            }
         }
+    } else if (reply.method == "server.add_peer") {
+        // handle
+        if constexpr (debugPrint) DebugM(info.hostName, ": add_peer... result = ", reply.result().toBool());
+        if (!verified) [[unlikely]]
+            // This should never happen; programming error if it does
+            Warning() << info.hostName << ": Got server.add_peer reply but PeerClient instance is not 'verified'! FIXME!";
+        stopTimer(kVerifiedPeerWaitForAddPeerReplyTimerName);
+        do_disconnect(/* graceful = */ true);
     } else
         Bad();
 }
@@ -953,23 +1047,23 @@ PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
                 continue;
             }
         }
-        QVariantList l3 = l2.at(2).toList();
+        const QVariantList l3 = l2.at(2).toList();
         bool isPruning = false;
         for (const auto & v : l3) {
-            QString s(v.toString().trimmed().left(kStringMax));
+            const QString s(v.toString().trimmed().left(kStringMax));
             if (s.isEmpty()) continue;
             if (s.startsWith('v', Qt::CaseInsensitive)) {
                 pi.protocolVersion = s;
             } else if (s.startsWith('t', Qt::CaseInsensitive)) {
                 bool ok;
                 unsigned p = s.mid(1).toUInt(&ok);
-                if (!p || !ok || p > std::numeric_limits<quint16>::max())
+                if (!ok || !isValidPort(p))
                     continue;
                 pi.tcp = quint16(p);
             } else if (s.startsWith('s', Qt::CaseInsensitive)) {
                     bool ok;
                     unsigned p = s.mid(1).toUInt(&ok);
-                    if (!p || !ok || p > std::numeric_limits<quint16>::max())
+                    if (!ok || !isValidPort(p))
                         continue;
                     pi.ssl = quint16(p);
             } else if (s.startsWith('p', Qt::CaseInsensitive) && s.mid(1).toInt()) {
@@ -1043,14 +1137,14 @@ void PeerClient::updateInfoFromRemoteFeaturesMap(const PeerInfo &o)
         if (!m.value("tcp_port").isNull()) {
             bool ok;
             unsigned val = m.value("tcp_port", 0).toUInt(&ok);
-            if (!ok || !val || val > std::numeric_limits<quint16>::max())
+            if (!ok || !isValidPort(val))
                 throw BadFeaturesMap("Bad tcp_port");
             pi.tcp = quint16(val);
         }
         if (!m.value("ssl_port").isNull()) {
             bool ok;
             unsigned val = m.value("ssl_port", 0).toUInt(&ok);
-            if (!ok || !val || val > std::numeric_limits<quint16>::max())
+            if (!ok || !isValidPort(val))
                 throw BadFeaturesMap("Bad ssl_port");
             pi.ssl = quint16(val);
         }
