@@ -491,7 +491,6 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         if (const auto it = std::as_const(clients).find(hostName); it != clients.end() && it.value() == obj) {
             clients.erase(it);
             peerIPAddrs.remove(addr); // mark it as gone from the set
-            updateSoon();
             if constexpr (debugPrint) DebugM("Removed peer from clients map: ", hostName);
         } else {
             if constexpr (debugPrint) DebugM("Peer not found in clients map: ", hostName);
@@ -514,7 +513,6 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
 
     peerIPAddrs.insert(pi.addr);
     clients[pi.hostName] = client;
-    updateSoon();
     return client;
 }
 
