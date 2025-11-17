@@ -194,7 +194,7 @@ void PeerMgr::cleanup()
 {
     stop();
     if (auto num = stopAllTimers(); num)
-        Debug() << objectName() << " stopped " << num << " active timers";
+        Debug() << objectName() << " stopped " << num << Util::Pluralize(" active timer", num);
     // Clean up all clients by deleting them immediately, unconditionally
     auto clientList = clients.values();
     clients.clear();
@@ -202,6 +202,8 @@ void PeerMgr::cleanup()
         disconnect(c, &QObject::destroyed, this, nullptr); // must kill the 'destroyed' signal to avoid potential issues
         delete c; // insta-kill
     }
+    if (auto num = clientList.size(); num)
+        Debug() << objectName() << " deleted " << num << Util::Pluralize(" active client", num);
 }
 
 void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &source)
