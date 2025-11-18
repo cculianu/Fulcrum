@@ -572,10 +572,13 @@ void PeerMgr::on_connectFailed(PeerClient *c)
             // non-working TCP ports but has a working SSL port. We tolerate this misoconfiguration since most wallets
             // are SSL-only anyway, and we want to grab up as many "good" servers as we can for wallets.
             c->info.preferSsl = true;
-            Log() << "Connection failed for peer " << hostName << " (" << c->info.addr.toString() << ")"
-                  << " to TCP port " << c->info.tcp << ", enqueing retry to SSL port " << c->info.ssl << " instead";
             queued[hostName] = c->info; // re-enqueue, this time we will try the SSL port, note: no DNS lookup will occur the second time through
             processSoon();
+            // NB: we do this logging from an async callback  so that the log message below appears *after* the regular
+            // "Connection refused" message from AbstractConnection (this is a nit, basically).
+            Util::AsyncOnObject(this, [prettyName = c->prettyName(), tcp = c->info.tcp, ssl = c->info.ssl] {
+                Warning() << prettyName << ": failed to connect to TCP port " << tcp << ", will retry SSL port " << ssl << " instead";
+            });
         } else {
             // Normal failure processing, mark it as failed
             c->info.preferSsl = false; // clear flag if set, so we start fresh with the TCP port next time we retry this server
