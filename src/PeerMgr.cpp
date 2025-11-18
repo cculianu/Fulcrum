@@ -711,6 +711,7 @@ QVariantMap PeerInfo::toStatsMap() const
         m["lastGoodAge"] = s;
     if (const auto s = ageHoursString(failureAge()); !s.isEmpty())
         m["failureAge"] = s;
+    m["preferSsl"] = preferSsl;
     return m;
 }
 
