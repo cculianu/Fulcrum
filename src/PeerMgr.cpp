@@ -565,12 +565,23 @@ void PeerMgr::on_connectFailed(PeerClient *c)
     c->info.genesisHash.clear();
     if (!c->wasKicked) {
         good.remove(hostName);
-        failed[hostName] = c->info;
+        if (c->info.tcp && c->info.ssl && !c->info.preferSsl) {
+            // We just failed on the TCP port, try the SSL port instead in case server is misconfigured and reports
+            // non-working TCP ports but has a working SSL port. We tolerate this misoconfiguration since most wallets
+            // are SSL-only anyway, and we want to grab up as many "good" servers as we can for wallets.
+            c->info.preferSsl = true;
+            Log() << "Connection failed for peer " << hostName << " on TCP port " << c->info.tcp
+                  << ", enqueing retry for SSL port " << c->info.ssl << " instead. (Misconfigured server?)";
+            queued[hostName] = c->info; // re-enqueue, this time we will try the SSL port, note: no DNS lookup will occur the second time through
+            processSoon();
+        } else {
+            // Normal failure processing, mark it as bad
+            failed[hostName] = c->info;
+        }
     }
     c->deleteLater(); // clean up
     updateSoon();
 }
-
 
 void PeerMgr::on_kickByAddress(const QHostAddress &addr)
 {
@@ -738,7 +749,8 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
    constexpr int kStaleThresholdMS = 30'000; ///< if a peer hasn't responded at all to a request in 30 seconds, consider it "stale"
    this->pingtime_ms = kStaleThresholdMS / 2; // member of AbstractConnection base class
    this->stale_threshold = kStaleThresholdMS; // member of AbstractConnection base class
-    if (pi.tcp) { // prefer tcp -- it's faster
+   const bool preferSsl = pi.preferSsl && pi.ssl;
+    if (pi.tcp && !preferSsl) { // if tcp exists and !preferSsl, prefer tcp since it's faster
         socket = new QTcpSocket(this);
     } else if (pi.ssl) {
         QSslSocket *ssl = new QSslSocket(this);
@@ -751,10 +763,10 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
         conf.setProtocol(QSsl::SslProtocol::AnyProtocol);
         ssl->setSslConfiguration(conf);
     }
-    // on any errors we just assume the connection is down, tell PeerMgr to put it in the connect failed list
-    connect(socket, Compat::SocketErrorSignalFunctionPtr(), this, [this](QAbstractSocket::SocketError){ emit connectFailed(this); });
-
     if (socket) {
+        // on any errors we just assume the connection is down, tell PeerMgr to put it in the connect failed list
+        connect(socket, Compat::SocketErrorSignalFunctionPtr(), this, [this](QAbstractSocket::SocketError){ emit connectFailed(this); });
+        // Call base class which connects more signals
         socketConnectSignals();
     } else {
         Warning() << "!ssl && !tcp for " << pi.hostName << "! FIXME!";
@@ -777,7 +789,6 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
 PeerClient::~PeerClient() {
     if constexpr (debugPrint) DebugM(__func__, ": ", info.hostName);
 }
-
 
 void PeerClient::connectToPeer()
 {
