@@ -577,7 +577,7 @@ void PeerMgr::on_connectFailed(PeerClient *c)
             queued[hostName] = c->info; // re-enqueue, this time we will try the SSL port, note: no DNS lookup will occur the second time through
             processSoon();
         } else {
-            // Normal failure processing, mark it as bad
+            // Normal failure processing, mark it as failed
             c->info.preferSsl = false; // clear flag if set, so we start fresh with the TCP port next time we retry this server
             failed[hostName] = c->info;
         }
