@@ -362,7 +362,7 @@ void PeerMgr::on_allServersStarted()
         retryFailedPeers(true);
         return true;
     });
-    // lastly, set up the "good peer refresh" timer which runs every kGoodPeerRefreshInterval minute, or at half the kGoodPeerRefreshInterval, whichever is smaller
+    // lastly, set up the "good peer refresh" timer which runs every minute, or at half the kGoodPeerRefreshInterval, whichever is smaller
     callOnTimerSoon(std::min<int>(60'000, kGoodPeerRefreshInterval*0.5*1e3), "goodPeerRefresh", [this]{
         refreshGoodPeers();
         return true;
@@ -1013,8 +1013,13 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
         }
         if (!verified) {
             verified = true;
+            if (info.firstGoodTs)
+                // This was a known "good" peer we just refreshed, no need to spam non-debug log
+                DebugM("Refreshed peer ", info.hostName, " (", info.addr.toString(), ")");
+            else
+                // Newly categorized as good, merits hitting the log
+                Log() << "Verified peer " << info.hostName << " (" << info.addr.toString() << ")";
             emit good(this); // updates peermgr good map, sets the goodTs, etc
-            Log() << "Verified peer " << info.hostName << " (" << info.addr.toString() << ")";
             // Handle disconnecting. Note that older Fulcrum versions never disconnect explicitly. This was added
             // at the behest of the ElectrumX devs to not eat up connection slots idling.
             if (waitForAddPeerReply) {
