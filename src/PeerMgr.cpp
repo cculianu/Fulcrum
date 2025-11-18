@@ -565,17 +565,20 @@ void PeerMgr::on_connectFailed(PeerClient *c)
     c->info.genesisHash.clear();
     if (!c->wasKicked) {
         good.remove(hostName);
-        if (c->info.tcp && c->info.ssl && !c->info.preferSsl) {
+        if (QString lcReason; c->info.tcp && c->info.ssl && !c->info.preferSsl
+            && ( (lcReason = c->info.failureReason.trimmed().toLower()) == "connection refused"
+                || lcReason == "connection failed: timed out")) {
             // We just failed on the TCP port, try the SSL port instead in case server is misconfigured and reports
             // non-working TCP ports but has a working SSL port. We tolerate this misoconfiguration since most wallets
             // are SSL-only anyway, and we want to grab up as many "good" servers as we can for wallets.
             c->info.preferSsl = true;
-            Log() << "Connection failed for peer " << hostName << " on TCP port " << c->info.tcp
-                  << ", enqueing retry for SSL port " << c->info.ssl << " instead. (Misconfigured server?)";
+            Log() << "Connection failed for peer " << hostName << " (" << c->info.addr.toString() << ")"
+                  << " to TCP port " << c->info.tcp << ", enqueing retry to SSL port " << c->info.ssl << " instead";
             queued[hostName] = c->info; // re-enqueue, this time we will try the SSL port, note: no DNS lookup will occur the second time through
             processSoon();
         } else {
             // Normal failure processing, mark it as bad
+            c->info.preferSsl = false; // clear flag if set, so we start fresh with the TCP port next time we retry this server
             failed[hostName] = c->info;
         }
     }
