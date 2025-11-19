@@ -178,7 +178,6 @@
     "e.keff.org": {
         "pruning": "-",
         "s": "50002",
-        "t": "50001",
         "version": "1.4"
     },
     "e2.keff.org": {

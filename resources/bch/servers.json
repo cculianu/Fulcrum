@@ -39,7 +39,7 @@
         "pruning": "-",
         "s": "50002",
         "t": "50001",
-        "version": "1.4.1"
+        "version": "1.6"
     },
     "electron.jochen-hoenicke.de": {
         "pruning": "-",
@@ -51,13 +51,7 @@
         "pruning": "-",
         "s": "50002",
         "t": "50001",
-        "version": "1.4.2"
-    },
-    "bch2.electroncash.dk": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4.3"
+        "version": "1.6"
     },
     "electrum.imaginary.cash": {
         "pruning": "-",
@@ -76,24 +70,6 @@
         "t": "50001",
         "version": "1.4"
     },
-    "electroncash.de": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4"
-    },
-    "electrs.electroncash.de": {
-        "pruning": "-",
-        "s": "40002",
-        "version": "1.4"
-    },
-    "jktsologn7uprtwn7gsgmwuddj6rxsqmwc2vaug7jwcwzm2bxqnfpwad.onion": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4",
-        "display": "electroncash.de"
-    },
     "electrs.bitcoinunlimited.info": {
         "pruning": "-",
         "s": "50002",
@@ -106,14 +82,8 @@
     },
     "bitcoincash.network": {
         "pruning": "-",
-        "s": "50002",
-        "version": "1.4.1"
-    },
-    "electrum.bitcoinverde.org": {
-        "pruning": "-",
-        "s": "50002",
         "t": "50001",
-        "version": "1.4.4"
+        "version": "1.4.3"
     },
     "cashnode.bch.ninja": {
         "pruning": "-",
@@ -137,7 +107,7 @@
         "s": "50002",
         "version": "1.5.0"
     },
-      "node.minisatoshi.cash": {
+    "node.minisatoshi.cash": {
         "pruning": "-",
         "s": "50002",
         "version": "1.5.3"

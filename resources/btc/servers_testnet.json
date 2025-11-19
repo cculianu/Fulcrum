@@ -22,16 +22,16 @@
         "t": "143",
         "version": "1.4"
     },
+    "gsw6sn27quwf6u3swgra6o7lrp5qau6kt3ymuyoxgkth6wntzm2bjwyd.onion": {
+        "t": "51001",
+        "s": "51002",
+        "version": "1.5.3"
+    },
     "testnet.aranguren.org": {
         "pruning": "-",
-        "s": "51002",
         "t": "51001",
-        "version": "1.4.2"
-    },
-    "testnet.hsmiths.com": {
-        "pruning": "-",
-        "s": "53012",
-        "version": "1.4.2"
+        "s": "51002",
+        "version": "1.5.3"
     },
     "testnet.qtornado.com": {
         "pruning": "-",
@@ -39,10 +39,10 @@
         "t": "51001",
         "version": "1.5"
     },
-    "tn.not.fyi": {
+    "utxo.unfxbcustody.com": {
         "pruning": "-",
-        "s": "55002",
-        "t": "55001",
-        "version": "1.4"
+        "s": "50002",
+        "t": "50001",
+        "version": "1.4.3"
     }
 }

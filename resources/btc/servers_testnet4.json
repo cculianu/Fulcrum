@@ -1,14 +1,28 @@
 {
+    "bitcoin.stagemole.eu": {
+        "t": "5000",
+        "s": "5010",
+        "version": "1.4.3"
+    },
     "blackie.c3-soft.com": {
         "pruning": "-",
         "s": "57010",
         "t": "57009",
         "version": "1.4"
     },
+    "fulcrum.theuplink.net": {
+        "s": "60002",
+        "version": "1.5.3"
+    },
     "testnet4-electrumx.wakiyamap.dev": {
         "pruning": "-",
         "s": "51001",
         "t": "51002",
-        "version": "1.4"
+        "version": "1.4.3"
+    },
+    "v22019051929289916.bestsrv.de": {
+        "s": "60001",
+        "t": "60002",
+        "version": "1.5.3"
     }
 }
