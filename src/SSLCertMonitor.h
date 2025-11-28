@@ -41,7 +41,7 @@ public:
 
     /// Actually starts the monitoring task and also populates the options->certs object with valid certs.
     /// May throw on error.
-    void start(const QString &certFile, const QString &keyFile, const QString &wssCertFile, const QString &wssKeyFile);
+    void start(const QString &certFile, const QString &keyFile, const QString &wssCertFile, const QString &wssKeyFile, const QString &httpsCertFile, const QString &httpsKeyFile);
 
 signals:
     /// This is emitted when the (valid) cert files on disk have changed and been re-read by this class.
@@ -53,7 +53,7 @@ private slots:
 
 private:
     std::shared_ptr<Options> options;
-    QString cert, key, wssCert, wssKey;
+    QString cert, key, wssCert, wssKey, httpsCert, httpsKey;
     QFileSystemWatcher *watcher = nullptr;
     QStringList watchedFiles;
 

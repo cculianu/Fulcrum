@@ -109,14 +109,19 @@ QVariantMap Options::toMap() const
     // /interfaces
 
     {
-        const auto & [certInfo, wssCertInfo] = certs.load();
+        const auto & [certInfo, wssCertInfo, httpsCertInfo] = certs.load();
         m["cert"] = certInfo.file;
         m["key"] = certInfo.keyFile;
         if (wssCertInfo.has_value()) {
             m["wss-cert"] = wssCertInfo->file;
             m["wss-key"] = wssCertInfo->keyFile;
         }
+        if (wssCertInfo.has_value()) {
+            m["https-cert"] = httpsCertInfo->file;
+            m["https-key"] = httpsCertInfo->keyFile;
+        }
     }
+    m["httpCorsDomain"] = httpCorsDomain;
     m["bitcoind"] = QString("%1:%2").arg(bdRPCInfo.hostPort.first, QString::number(bdRPCInfo.hostPort.second));
     m["bitcoind-tls"] = bdRPCInfo.tls;
     m["hasIPv6 listener"] = hasIPv6Listener;
@@ -140,6 +145,8 @@ QVariantMap Options::toMap() const
     m["public_ssl_port"] = publicSsl.has_value() ? QVariant(*publicSsl) : QVariant();
     m["public_ws_port"] = publicWs.has_value() ? QVariant(*publicWs) : QVariant();
     m["public_wss_port"] = publicWss.has_value() ? QVariant(*publicWss) : QVariant();
+    m["public_http_port"] = publicHttp.has_value() ? QVariant(*publicHttp) : QVariant();
+    m["public_https_port"] = publicHttps.has_value() ? QVariant(*publicHttps) : QVariant();
     m["max_clients_per_ip"] = maxClientsPerIP;
     l.clear();
     for (const auto & sn : subnetsExcludedFromPerIPLimits)
@@ -156,6 +163,8 @@ QVariantMap Options::toMap() const
     m["tor_ssl_port"] = torSsl.has_value() ? QVariant(*torSsl) : QVariant();
     m["tor_ws_port"] = torWs.has_value() ? QVariant(*torWs) : QVariant();
     m["tor_wss_port"] = torWss.has_value() ? QVariant(*torWss) : QVariant();
+    m["tor_http_port"] = torHttp.has_value() ? QVariant(*torHttp) : QVariant();
+    m["tor_https_port"] = torHttps.has_value() ? QVariant(*torHttps) : QVariant();
     m["tor_proxy"] = QString("%1:%2").arg(torProxy.first.toString()).arg(torProxy.second);
     m["tor_user"] = torUser.isNull() ? QVariant() : QVariant("<hidden>");
     m["tor_pass"] = torPass.isNull() ? QVariant() : QVariant("<hidden>");

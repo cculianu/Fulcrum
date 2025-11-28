@@ -103,7 +103,7 @@ public:
     QString prettyName() const override;
 
     /* other methods not supported for now */
-    enum class Method { GET, POST };
+    enum class Method { GET, POST, OPTIONS };
 
     struct Request {
         QString httpVersion = "HTTP/1.1";
@@ -187,6 +187,21 @@ public:
     /// This should be called/set once before we begin listening for connections.  Called by SrvMgr depending on options from config.
     virtual void setUsesWebSockets(bool b) { usesWS = b; resetName(); }
 
+    /// This should be called/set once before we begin listening for connections.  Called by SrvMgr depending on options from config.
+    virtual void setUsesHttp(bool b) { usesHttp = b; resetName(); }
+
+    struct RPCError : public Exception {
+        RPCError(const QString & message, int code = RPC::ErrorCodes::Code_App_BadRequest, bool disconnect = false)
+            : Exception(message), code(code), disconnect(disconnect) {}
+        const int code;
+        const bool disconnect;
+        ~RPCError () override;
+    };
+    struct RPCErrorWithDisconnect : public RPCError {
+        RPCErrorWithDisconnect(const QString &message) : RPCError(message, RPC::ErrorCodes::Code_App_BadRequest, true) {}
+        ~RPCErrorWithDisconnect() override;
+    };
+
 signals:
     /// connected to SrvMgr clientConnected slot by SrvMgr class
     void clientConnected(IdMixin::Id clientId, const QHostAddress & remoteAddress);
@@ -260,18 +275,6 @@ protected:
     void killClient(Client *);
     QHash<IdMixin::Id, Client *> clientsById;
 
-    struct RPCError : public Exception {
-        RPCError(const QString & message, int code = RPC::ErrorCodes::Code_App_BadRequest, bool disconnect = false)
-            : Exception(message), code(code), disconnect(disconnect) {}
-        const int code;
-        const bool disconnect;
-        ~RPCError () override;
-    };
-    struct RPCErrorWithDisconnect : public RPCError {
-        RPCErrorWithDisconnect(const QString &message) : RPCError(message, RPC::ErrorCodes::Code_App_BadRequest, true) {}
-        ~RPCErrorWithDisconnect() override;
-    };
-
     struct DontAutoSendReply_t {};
     static constexpr DontAutoSendReply_t DontAutoSendReply{};
     using BitcoinDSuccessFuncResult = std::variant<QVariant, DontAutoSendReply_t>;
@@ -314,6 +317,11 @@ protected:
     const std::shared_ptr<BitcoinDMgr> bitcoindmgr;
 
     PeerInfoList peers;
+
+    /// Default false. If true, derived classes should instead respond with plain http.
+    /// See getter/setter: usesHttp and setUsesHttp.  Decided by the
+    /// "http" & "https" config file options and/or the --http/--https (-h/-H) CLI args.
+    bool usesHttp = false;
 
     /// Default false. If true, derived classes should instead create WebSocket::Wrapper instances of the underlying
     /// QTcpSocket or QSslSocket.  See getter/setter: usesWebSockets and setUsesWebSockets.  Decided by the
@@ -701,6 +709,8 @@ public:
     /// Reimplements base class, defaulting `anon` to whatever is set in options, and then calls base class impl.
     QString prettyName(bool dontTouchSocket=false, bool showId=true, AnonymizeIP anon=AnonymizeIP::Auto) const override;
 
+    /// Helper used by rpc_server_version to set our info fields from the client's version message.
+    Version setServerVersion(QVariantList &, bool);
 signals:
     /// Used by ServerBase via a direct connection.  The class d'tor emits this.  This is better for us than
     /// QObject::destroyed because that runs after this type no longer is a "Client", whereas this is emitted
@@ -712,8 +722,24 @@ protected:
 
     /// Does some per-IP book-keeping. If everything checks out, returns true. Otherwise returns false.
     [[nodiscard]] bool canAcceptBatch(RPC::BatchProcessor *) override;
-private:
     const Options & options;
+};
+
+class HttpClient : public Client {
+    Q_OBJECT
+public:
+    ~HttpClient() override;
+    bool isHttp() const override { return true; }
+    QString prettyName(bool, bool, AnonymizeIP) const override;
+protected:
+    /// Only Server instances can construct us
+    friend class ::ServerBase;
+    friend class ::Server;
+    /// NB: sock should be in an already connected state. `options` should be guaranteed to outlive this instance.
+    explicit HttpClient(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, const Options &options);
+    QByteArray wrapForSend(QByteArray &&) override;
+    void on_readyRead() override;
+    void cleanupForNextRequest();
 };
 
 namespace detail {

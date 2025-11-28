@@ -52,6 +52,15 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 -W, --wss <interface:port>
 :   Specify an <interface:port> on which to listen for Web Socket Secure connections (encrypted, wss://). Note that if this option is specified, then the --cert and --key options (or alternatively, the --wss-cert and --wss-key options) need to also be specified otherwise the app will refuse to run. This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50004 on mainnet and 60004 on testnet.
 
+--http <interface:port>
+:   Specify an <interface:port> on which to listen for HTTP connections (unencrypted, http://). This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50005 on mainnet and 60005 on testnet.
+
+--https <interface:port>
+:   Specify an <interface:port> on which to listen for HTTP Secure connections (encrypted, https://). Note that if this option is specified, then the --cert and --key options (or alternatively, the --https-cert and --https-key options) need to also be specified otherwise the app will refuse to run. This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50006 on mainnet and 60006 on testnet.
+
+--http-cors-domain <value>
+:   Domain from which to accept cross origin requests. `*` allows all origins. If not specified, browser requests will never work.
+
 -c, --cert <crtfile>
 :   Specify a PEM file to use as the server's SSL certificate.  This option is required if the -s/--ssl and/or the -W/--wss options appear at all on the command-line.  The file should contain either a single valid self-signed certificate or the full certificate chain if using CA-signed certificates.
 

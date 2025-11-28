@@ -140,13 +140,21 @@ void SrvMgr::startServers()
     UPnP::MapSpecSet upnpPorts;
     const auto num =   options->interfaces.length() + options->sslInterfaces.length()
                      + options->wsInterfaces.length() + options->wssInterfaces.length()
+                     + options->httpInterfaces.length() + options->httpsInterfaces.length()
                      + options->adminInterfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
     const auto firstSsl = options->interfaces.size(),
                firstWs = options->interfaces.size() + options->sslInterfaces.size(),
-               firstWss = options->interfaces.size() + options->sslInterfaces.size() + options->wsInterfaces.size();
+               firstWss = options->interfaces.size() + options->sslInterfaces.size() + options->wsInterfaces.size(),
+               firstHttp = options->interfaces.size() + options->sslInterfaces.size()
+                         + options->wsInterfaces.size() + options->wssInterfaces.size(),
+               firstHttps = options->interfaces.size() + options->sslInterfaces.size()
+                          + options->wsInterfaces.size() + options->wssInterfaces.size()
+                          + options->httpInterfaces.size();
     int i = 0;
-    for (const auto & iface : options->interfaces + options->sslInterfaces + options->wsInterfaces + options->wssInterfaces) {
+    for (const auto & iface : options->interfaces + options->sslInterfaces + options->wsInterfaces + options->wssInterfaces
+                            + options->httpInterfaces + options->httpsInterfaces
+                        ) {
         if (i < firstSsl) {
             // TCP
             servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
@@ -157,10 +165,18 @@ void SrvMgr::startServers()
             // WS
             servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
             servers.back()->setUsesWebSockets(true);
-        } else {
+        } else if (i < firstHttp) {
             // WSS
             servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
             servers.back()->setUsesWebSockets(true);
+        } else if (i < firstHttps) {
+            // HTTP
+            servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.back()->setUsesHttp(true);
+        } else {
+            // HTTPS
+            servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.back()->setUsesHttp(true);
         }
         if (upnp && iface.isValidAndNonLocalLoopback()) {
             upnpPorts.emplace(UPnP::MapSpec{.extPort = iface.second, .inPort = iface.second});
@@ -224,7 +240,9 @@ void SrvMgr::startServers()
         for (const auto & [optPort, ifaces] : ContForLoop{{options->publicTcp, options->interfaces},
                                                           {options->publicSsl, options->sslInterfaces},
                                                           {options->publicWs, options->wsInterfaces},
-                                                          {options->publicWss, options->wssInterfaces}}) {
+                                                          {options->publicWss, options->wssInterfaces},
+                                                          {options->publicHttp, options->httpInterfaces},
+                                                          {options->publicHttps, options->httpsInterfaces}}) {
             if (!optPort) continue;
             const uint16_t extPort = *optPort;
             UPnP::MapSpecSet::iterator it = upnpPorts.lower_bound({.extPort = extPort, .inPort = 0});

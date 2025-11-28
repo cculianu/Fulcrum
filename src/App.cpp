@@ -423,6 +423,20 @@ void App::parseArgs()
        " Suggested values for port: %1 on mainnet and %2 on testnet.\n").arg(Options::DEFAULT_PORT_WSS).arg(Options::DEFAULT_PORT_WSS + 10000),
        QString("interface:port"),
     },
+    {  "http",
+       QString("Specify an <interface:port> on which to listen for HTTP connections (unencrypted, http://)."
+       " This option may be specified more than once to bind to multiple interfaces and/or ports."
+       " Suggested values for port: %1 on mainnet and %2 on testnet.\n").arg(Options::DEFAULT_PORT_HTTP).arg(Options::DEFAULT_PORT_HTTP + 10000),
+       QString("interface:port"),
+    },
+    {  "https",
+       QString("Specify an <interface:port> on which to listen for HTTP Secure connections (encrypted, https://)."
+       " Note that if this option is specified, then the --cert and --key options (or alternatively, the --https-cert"
+       " and --https-key options) need to also be specified otherwise the app will refuse to run."
+       " This option may be specified more than once to bind to multiple interfaces and/or ports."
+       " Suggested values for port: %1 on mainnet and %2 on testnet.\n").arg(Options::DEFAULT_PORT_HTTPS).arg(Options::DEFAULT_PORT_HTTPS + 10000),
+       QString("interface:port"),
+    },
     { { "c", "cert" },
        QString("Specify a PEM file to use as the server's SSL certificate. This option is required if the -s/--ssl"
        " and/or the -W/--wss options appear at all on the command-line. The file should contain either a single"
@@ -447,6 +461,24 @@ void App::parseArgs()
       QString("Specify a private key PEM file to use for WSS. This key must go with the certificate specified in"
               " --wss-cert. If this option is specified, --wss-cert must also be specified.\n"),
       QString("keyfile"),
+    },
+    { "https-cert",
+      QString("Specify a certificate PEM file to use specifically for only HTTPS ports. This option is intended to"
+              " allow HTTPS ports to use a CA-signed certificate (required by web browsers), whereas legacy Electrum"
+              " Cash ports may want to continue to use self-signed certificates. If this option is specified,"
+              " --https-key must also be specified. If this option is missing, then HTTPS ports will just fall-back to"
+              " using the certificate specified by --cert.\n"),
+      QString("crtfile"),
+    },
+    { "https-key",
+      QString("Specify a private key PEM file to use for HTTPS. This key must go with the certificate specified in"
+              " --https-cert. If this option is specified, --https-cert must also be specified.\n"),
+      QString("keyfile"),
+    },
+    { "http-cors-domain",
+      QString("Domain from which to accept cross origin requests. `*` allows all origins. If not specified, browser"
+              " requests will never work.\n"),
+      QString("value"),
     },
     { { "a", "admin" },
       QString("Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service."
@@ -932,6 +964,19 @@ void App::parseArgs()
             }
         }
     }
+    // grab bind (listen) interfaces for HTTP -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
+    if (auto l = conf.hasValue("http") ? conf.values("http") : parser.values("http");  !l.isEmpty()) {
+        parseInterfaces(options->httpInterfaces, l);
+        if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
+        // save default publicHttp we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_http_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->httpInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicHttp = iface.second;
+                break;
+            }
+        }
+    }
     // grab bind (listen) interfaces for WSS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
     if (auto l = conf.hasValue("wss") ? conf.values("wss") : parser.values("W");  !l.isEmpty()) {
         parseInterfaces(options->wssInterfaces, l);
@@ -941,6 +986,19 @@ void App::parseArgs()
         for (const auto & iface : std::as_const(options->wssInterfaces)) {
             if (iface.isValidAndNonLocalLoopback()) {
                 options->publicWss = iface.second;
+                break;
+            }
+        }
+    }
+    // grab bind (listen) interfaces for HTPPS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
+    if (auto l = conf.hasValue("https") ? conf.values("https") : parser.values("https");  !l.isEmpty()) {
+        parseInterfaces(options->httpsInterfaces, l);
+        if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
+        // save default publicHttps we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_https_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->httpsInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicHttps = iface.second;
                 break;
             }
         }
@@ -958,27 +1016,32 @@ void App::parseArgs()
             }
         }
     }
-    // if they had either SSL or WSS, grab and validate the cert & key
-    if (const bool hasSSL = !options->sslInterfaces.isEmpty(), hasWSS = !options->wssInterfaces.isEmpty(); hasSSL || hasWSS) {
+    // if they had either SSL, WSS or HTTPS, grab and validate the cert & key
+    if (const bool hasSSL = !options->sslInterfaces.isEmpty(), hasWSS = !options->wssInterfaces.isEmpty(), hasHTTPS = !options->httpsInterfaces.isEmpty(); hasSSL || hasWSS || hasHTTPS) {
         // check that Qt actually supports SSL since we now know that we require it to proceed
         checkSupportsSsl();
         QString cert    = conf.value("cert",     parser.value("c")),
                 key     = conf.value("key",      parser.value("k")),
                 wssCert = conf.value("wss_cert", conf.value("wss-cert", parser.value("wss-cert"))),
-                wssKey  = conf.value("wss_key",  conf.value("wss-key", parser.value("wss-key")));
-        // ensure --cert/--key and --wss-cert/--wss-key pairs are both specified together (or not specified at all)
+                wssKey  = conf.value("wss_key",  conf.value("wss-key", parser.value("wss-key"))),
+                httpsCert = conf.value("https_cert", conf.value("https-cert", parser.value("https-cert"))),
+                httpsKey  = conf.value("https_key",  conf.value("https-key", parser.value("https-key")));
+        // ensure --cert/--key, --wss-cert/--wss-key, --https-cert/--https-key pairs are both specified together (or not specified at all)
         for (const auto & [c, k, txt] : { std::tuple(cert, key, static_cast<const char *>("`cert` and `key`")),
-                                          std::tuple(wssCert, wssKey, static_cast<const char *>("`wss-cert` and `wss-key`")) }) {
+                                          std::tuple(wssCert, wssKey, static_cast<const char *>("`wss-cert` and `wss-key`")),
+                                          std::tuple(httpsCert, httpsKey, static_cast<const char *>("`https-cert` and `https-key`")) }) {
             if (std::tuple(c.isEmpty(), k.isEmpty()) != std::tuple(k.isEmpty(), c.isEmpty()))
                 throw BadArgs(QString("%1 must both be specified").arg(txt));
         }
-        // . <-- at this point, cert.isEmpty() and/or wssCert.isEmpty() are synonymous for both the cert/key pair being either empty or non-empty
+        // . <-- at this point, cert.isEmpty(), wssCert.isEmpty() and/or httpsCert.isEmpty() are synonymous for both the cert/key pair being either empty or non-empty
 
         // The rules are:  Default to using -c and -k.  (both must be present)
         // If they are using wss, allow --wss-cert and --wss-key (both must be present)
         // If the only secure port is wss, allow -c/-k to be missing (use --wss-cert and --wss-key instead).
+        // If they are using https, allow --https-cert and --https-key (both must be present)
+        // If the only secure port is https, allow -c/-k to be missing (use --https-cert and --https-key instead).
         // Otherwise if no cert and key combo, throw.
-        if ( cert.isEmpty() && (hasSSL || wssCert.isEmpty()) )  {
+        if ( cert.isEmpty() && (hasSSL || wssCert.isEmpty() || httpsCert.isEmpty()) )  {
             throw BadArgs(QString("%1 option requires both -c/--cert and -k/--key options be specified")
                           .arg(hasSSL ? "SSL" : "WSS"));
         }
@@ -990,7 +1053,7 @@ void App::parseArgs()
         // detect filesystem changes. Below may throw if there is a problem reading/processing
         // the certs.
         if (!sslCertMonitor) sslCertMonitor = std::make_unique<SSLCertMonitor>(options, this);
-        sslCertMonitor->start(cert, key, wssCert, wssKey);
+        sslCertMonitor->start(cert, key, wssCert, wssKey, httpsCert, httpsKey);
     }
     // stats port -- this supports <port> by itself as well
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")
@@ -1050,6 +1113,23 @@ void App::parseArgs()
         if (!val) options->publicWss.reset();
         else options->publicWss = val;
     }
+    if (conf.hasValue("public_http_port")) {
+        bool ok = false;
+        int val = conf.intValue("public_http_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("public_http_port parse error: not an integer from 0 to 65535");
+        if (!val) options->publicHttp.reset();
+        else options->publicHttp = val;
+    }
+    if (conf.hasValue("public_https_port")) {
+        bool ok = false;
+        int val = conf.intValue("public_https_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("public_https_port parse error: not an integer from 0 to 65535");
+        if (!val) options->publicHttps.reset();
+        else options->publicHttps = val;
+    }
+    options->httpCorsDomain = conf.value("http_cors_domain", parser.value("http-cors-domain"));
     const auto ConfParseBool = [conf](const QString &key, bool def = false) -> bool {
         if (!conf.hasValue(key)) return def;
         const QString str = conf.value(key);

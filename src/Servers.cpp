@@ -163,7 +163,6 @@ void AbstractTcpServer::pvt_on_newConnection()
     }
 }
 
-
 SimpleHttpServer::SimpleHttpServer(const QHostAddress &listenAddr, quint16 listenPort, qint64 maxBuffer, qint64 timeLimit)
     : AbstractTcpServer(listenAddr, listenPort), MAX_BUFFER(maxBuffer > 0 ? maxBuffer : DEFAULT_MAX_BUFFER),
       TIME_LIMIT(timeLimit)
@@ -588,7 +587,10 @@ Client *
 ServerBase::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(&rpcMethods(), clientId, sock, *options);
+    auto ret = clientsById[clientId] = usesHttp ?
+        new HttpClient(&rpcMethods(), clientId, sock, *options) :
+        new Client(&rpcMethods(), clientId, sock, *options);
+
     const auto addr = ret->peerAddress();
 
     ret->perIPData = detail::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
@@ -692,6 +694,12 @@ void ServerBase::onMessage(IdMixin::Id clientId, RPC::BatchId batchId, const RPC
 {
     TraceM("onMessage: ", clientId, ", ", batchId.get(), " json: ", m.toJsonUtf8());
     if (Client *c = getClient(clientId); c) {
+        if (this->usesHttp && m.method.contains("subscribe") && !m.method.startsWith("server.peers.subscribe")) {
+            emit c->sendError(true, RPC::ErrorCodes::Code_MethodNotFound,
+                              QString("Method \"%1\" not found").arg(m.method), batchId, m.id);
+            return;
+        }
+
         const auto member = dispatchTable.value(m.method);
         if (!member)
             Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonUtf8();
@@ -962,7 +970,7 @@ Server::~Server() { stop(); }
 
 QString Server::prettyName() const
 {
-    return (usesWS ? QStringLiteral("Ws%1") : QStringLiteral("Tcp%1")).arg(AbstractTcpServer::prettyName());
+    return (usesWS ? QStringLiteral("Ws%1") : (usesHttp ? QStringLiteral("Http%1") : QStringLiteral("Tcp%1"))).arg(AbstractTcpServer::prettyName());
 }
 
 /// override from base -- we add custom stats for things like the bloom filter stats, etc
@@ -1226,41 +1234,7 @@ void Server::rpc_server_ping(Client *c, const RPC::BatchId batchId, const RPC::M
 void Server::rpc_server_version(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
-    if (l.size() == 0)
-        // missing client useragent, default to "Unknown"
-        l.push_back(c->info.userAgent);
-    if (l.size() == 1)
-        // missing second arg, protocolVersion, default to our minimal protocol version "1.4"
-        l.push_back(ServerMisc::MinProtocolVersion.toString());
-    assert(l.size() >= 2);
-    if (l.size() > 2 && Debug::isEnabled()) {
-        const auto extraArgsStr = Json::toUtf8(l.mid(2), true);
-        Debug() << "Client " << c->id << " sent extra server.version args (ignored): " << Util::Ellipsify(extraArgsStr, 80);
-    }
-
-    if (c->info.alreadySentVersion)
-        throw RPCError(QString("%1 already sent").arg(m.method));
-
-    Version pver;
-    if (const auto sl = l[1].toStringList(); sl.size() == 2) {
-        // Ergh. EX also supports (protocolMin, protocolMax) tuples as the second arg! :/
-        Version cMin = sl[0].left(kMaxServerVersionLen);
-        Version cMax = sl[1].left(kMaxServerVersionLen);
-        if (!cMin.isValid() || !cMax.isValid() || cMin > cMax)
-            throw RPCErrorWithDisconnect(QString("Bad version tuple: %1").arg(sl.join(", ")));
-
-        pver = std::min(cMax, ServerMisc::MaxProtocolVersion);
-        if (pver < std::max(cMin, ServerMisc::MinProtocolVersion))
-            pver = Version();
-    } else {
-        pver = l[1].toString().left(kMaxServerVersionLen); // try and parse version, see Version.cpp, QString constructor.
-    }
-    if (!pver.isValid() || pver < ServerMisc::MinProtocolVersion || pver > ServerMisc::MaxProtocolVersion)
-        throw RPCErrorWithDisconnect("Unsupported protocol version");
-
-    c->info.userAgent = l[0].toString().left(kMaxServerVersionLen);
-    c->info.protocolVersion = pver;
-    c->info.alreadySentVersion = true;
+    const auto pver = c->setServerVersion(l, true);
     emit c->sendResult(batchId, m.id, QStringList({ServerMisc::AppSubVersion, pver.toString()}));
 }
 
@@ -2785,15 +2759,15 @@ ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, c
 ServerSSL::~ServerSSL() { stop(); }
 QString ServerSSL::prettyName() const
 {
-    return (usesWS ? QStringLiteral("Wss%1") : QStringLiteral("Ssl%1")).arg(AbstractTcpServer::prettyName());
+    return (usesWS ? QStringLiteral("Wss%1") : (usesHttp ? QStringLiteral("Https%1") : QStringLiteral("Ssl%1"))).arg(AbstractTcpServer::prettyName());
 }
 void ServerSSL::setupSslConfiguration()
 {
     const bool wasEmptyConf = sslConfiguration.isNull();
-    const auto & [certInfo, wssCertInfo] = options->certs.load(); // thread-safety: take a local copy
-    const QSslCertificate & cert = usesWS && wssCertInfo.has_value() ? wssCertInfo->cert : certInfo.cert;
-    const QList<QSslCertificate> & chain = usesWS && wssCertInfo.has_value() ? wssCertInfo->certChain : certInfo.certChain;
-    const QSslKey & key = usesWS && wssCertInfo.has_value() ? wssCertInfo->key : certInfo.key;
+    const auto & [certInfo, wssCertInfo, httpsCertInfo] = options->certs.load(); // thread-safety: take a local copy
+    const QSslCertificate & cert = usesWS && wssCertInfo.has_value() ? wssCertInfo->cert : (usesHttp && httpsCertInfo.has_value() ? wssCertInfo->cert : certInfo.cert);
+    const QList<QSslCertificate> & chain = usesWS && wssCertInfo.has_value() ? wssCertInfo->certChain : (usesHttp && httpsCertInfo.has_value() ? httpsCertInfo->certChain : certInfo.certChain);
+    const QSslKey & key = usesWS && wssCertInfo.has_value() ? wssCertInfo->key : (usesHttp && httpsCertInfo.has_value() ? httpsCertInfo->key : certInfo.key);
 
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be constructed: Key or cert is null!");
@@ -3405,6 +3379,47 @@ QString Client::prettyName(bool dontTouchSocket, bool showId, AnonymizeIP anon) 
     return RPC::ElectrumConnection::prettyName(dontTouchSocket, showId, anon);
 }
 
+Version Client::setServerVersion(QVariantList &l, bool throwOnAlreadySent)
+{
+    if (l.size() == 0)
+        // missing client useragent, default to "Unknown"
+        l.push_back(info.userAgent);
+    if (l.size() == 1)
+        // missing second arg, protocolVersion, default to our minimal protocol version "1.4"
+        l.push_back(ServerMisc::MinProtocolVersion.toString());
+    assert(l.size() >= 2);
+    if (l.size() > 2 && Debug::isEnabled()) {
+        const auto extraArgsStr = Json::toUtf8(l.mid(2), true);
+        Debug() << "Client " << id << " sent extra server.version args (ignored): " << Util::Ellipsify(extraArgsStr, 80);
+    }
+
+    if (info.alreadySentVersion && throwOnAlreadySent)
+        throw ServerBase::RPCError("server.version already sent");
+
+    Version pver;
+    if (const auto sl = l[1].toStringList(); sl.size() == 2) {
+        // Ergh. EX also supports (protocolMin, protocolMax) tuples as the second arg! :/
+        Version cMin = sl[0].left(kMaxServerVersionLen);
+        Version cMax = sl[1].left(kMaxServerVersionLen);
+        if (!cMin.isValid() || !cMax.isValid() || cMin > cMax)
+            throw ServerBase::RPCErrorWithDisconnect(QString("Bad version tuple: %1").arg(sl.join(", ")));
+
+        pver = std::min(cMax, ServerMisc::MaxProtocolVersion);
+        if (pver < std::max(cMin, ServerMisc::MinProtocolVersion))
+            pver = Version();
+    } else {
+        pver = l[1].toString().left(kMaxServerVersionLen); // try and parse version, see Version.cpp, QString constructor.
+    }
+    if (!pver.isValid() || pver < ServerMisc::MinProtocolVersion || pver > ServerMisc::MaxProtocolVersion)
+        throw ServerBase::RPCErrorWithDisconnect("Unsupported protocol version");
+
+    info.userAgent = l[0].toString().left(kMaxServerVersionLen);
+    info.protocolVersion = pver;
+    info.alreadySentVersion = true;
+
+    return pver;
+}
+
 bool Client::hasMinimumTokenAwareVersion() const { return info.protocolVersion >= ServerMisc::MinTokenAwareProtocolVersion; }
 
 void Client::do_disconnect(bool graceful)
@@ -3492,6 +3507,174 @@ bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
     return true;
 }
 
+HttpClient::HttpClient(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, const Options & options_)
+    : Client(mm, id_in, sock, options_)
+{
+}
+
+HttpClient::~HttpClient()
+{
+}
+
+void HttpClient::cleanupForNextRequest() {
+    socket->setProperty("req-header", QVariantMap());
+    socket->setProperty("req-loc", QString());
+    socket->setProperty("req-meth", QString());
+    socket->setProperty("req-ver", QString());
+}
+
+QByteArray HttpClient::wrapForSend(QByteArray && data)
+{
+    // prepare the rest of the header
+    QByteArray responseHeader;
+    {
+        QTextStream ss(&responseHeader, QIODevice::WriteOnly);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        ss.setCodec("UTF-8");
+#else
+        ss.setEncoding(QStringConverter::Utf8);
+#endif
+        ss << "Content-Length: " << data.length() << "\r\n";
+        ss << "\r\n";
+    }
+
+    const qint64 respTotalLen = socket->property("resp-len").toLongLong() + responseHeader.length() + data.length();
+    socket->setProperty("resp-len", respTotalLen);
+
+    // write out the header
+    emit send(responseHeader);
+
+    cleanupForNextRequest();
+
+    // let the base class write the response to socket
+    return std::move(data);
+}
+
+void HttpClient::on_readyRead()
+{
+    QTcpSocket * sock = socket;
+    const QString sockName = AbstractTcpServer::prettySock(sock);
+
+    try {
+        while(sock->canReadLine()) {
+            auto line = QString(sock->readLine()).trimmed();
+            // DebugM(sockName, " Got line: ", line);
+            if (QString loc = sock->property("req-loc").toString(); loc.isEmpty()) {
+                auto toks = line.split(' ');
+                if (toks.length() != 3 || (toks[0] != "OPTIONS" && toks[0] != "POST") || toks[2] != "HTTP/1.1")
+                    throw Exception(QString("Invalid request: %1").arg(line));
+                TraceM(sockName, " ", line);
+                sock->setProperty("req-loc", toks[1]);
+                sock->setProperty("req-meth", toks[0]);
+                sock->setProperty("req-ver", toks[2]);
+            } else if (auto loc = sock->property("req-loc").toString(),
+                            meth = sock->property("req-meth").toString(),
+                            ver = sock->property("req-ver").toString();
+                        line.isEmpty() && !loc.isEmpty() && !meth.isEmpty() && !ver.isEmpty()) {
+                // got line by itself, prepare response
+                SimpleHttpServer::Request req;
+                auto & response = req.response;
+                req.httpVersion = ver;
+                req.method = meth == "OPTIONS" ? SimpleHttpServer::Method::OPTIONS : SimpleHttpServer::Method::POST;
+                auto vmap = sock->property("req-header").toMap();
+                for (auto it = vmap.begin(); it != vmap.end(); ++it) {
+                    // save header
+                    req.header[it.key()] = it.value().toString();
+                    if (it.key() == "server.version") {
+                        try {
+                            auto versionList = Json::parseUtf8(it.value().toString().toUtf8(), Json::ParseOption::RequireArray).toList();
+                            auto pver = setServerVersion(versionList, false);
+                            response.headerExtra.append(QString("server.version: [\"%1\", \"%2\"]\r\n").arg(ServerMisc::AppSubVersion).arg(pver.toString()).toUtf8());
+                        } catch (const std::exception &e) {
+                            response.status = 400;
+                            response.statusText = e.what();
+                            response.data = QString(e.what()).toUtf8();
+                        }
+                    }
+                }
+                    
+                if (auto i = loc.indexOf('?'); i > -1) {
+                    req.queryString = loc.mid(i+1);
+                    req.endPoint = loc.left(i);
+                } else
+                    req.endPoint = loc;
+                if (loc != "/") {
+                    // could not find any enpoints that match, set up a 404 response
+                    response.status = 404;
+                    response.statusText = "Unknown resource";
+                    response.data = QString("Unknown resource").toUtf8();
+                }
+                if (req.method == SimpleHttpServer::Method::POST) {
+                    req.response.contentType = "application/json; charset=utf-8";
+                } else if (req.method == SimpleHttpServer::Method::OPTIONS) {
+                    response.headerExtra.append(QString("Access-Control-Allow-Methods: POST\r\nAccess-Control-Allow-Headers: content-type, server.version\r\n").toUtf8());
+                    response.data = response.statusText;
+                }
+                // setup header
+                QByteArray responseHeader;
+                {
+                    QTextStream ss(&responseHeader, QIODevice::WriteOnly);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+                    ss.setCodec("UTF-8");
+#else
+                    ss.setEncoding(QStringConverter::Utf8);
+#endif
+                    ss << "HTTP/1.1 " << response.status << " " << req.response.statusText.trimmed() << "\r\n";
+                    ss << "Content-Type: " << response.contentType.trimmed() << "\r\n";
+                    ss << response.headerExtra;
+                    if (options.httpCorsDomain.length()) {
+                        ss << "Access-Control-Allow-Origin: " << options.httpCorsDomain << "\r\n";
+                    }
+                    if (response.data.length()) {
+                        ss << "Content-Length: " << response.data.length() << "\r\n";
+                        ss << "\r\n";
+                    }
+                }
+                const qint64 respTotalLen = responseHeader.length() + response.data.length();
+                sock->setProperty("resp-len", respTotalLen);
+                // write out header
+                emit send(responseHeader);
+                if (response.data.length())
+                    // write out response data
+                    emit send(response.data);
+
+                if (req.method != SimpleHttpServer::Method::POST || response.status != 200) {
+                    // done with this request, clear saved state
+                    cleanupForNextRequest();
+
+                    return;
+                }
+            } else {
+                // save params
+                auto vmap = sock->property("req-header").toMap();
+                auto toks = line.split(QStringLiteral(": "));
+                if (toks.length() >= 2) {
+                    auto name = toks.front(); toks.pop_front();
+                    auto value = toks.join(QStringLiteral(": "));
+                    vmap[name] = value;
+                    sock->setProperty("req-header", vmap);
+                } else
+                    throw Exception("garbage data, closing connection");
+            }
+        }
+
+        if (sock->bytesAvailable() > DEFAULT_MAX_BUFFER)
+            throw Exception("too much data, closing connection");
+
+    } catch (const std::exception &e) {
+        Warning() << "Client: " << sockName << "; " << e.what();
+        sock->abort();
+        sock->deleteLater();
+    }
+
+    Client::on_readyRead();
+}
+
+QString HttpClient::prettyName(bool dontTouchSocket, bool showId, AnonymizeIP anon) const
+{
+    if (anon == AnonymizeIP::Auto) anon = options.anonLogs ? AnonymizeIP::Yes : AnonymizeIP::No;
+    return RPC::ElectrumConnection::prettyName(dontTouchSocket, showId, anon);
+}
 
 #ifdef ENABLE_TESTS
 namespace {

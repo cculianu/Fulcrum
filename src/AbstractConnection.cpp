@@ -40,8 +40,8 @@ QString AbstractConnection::prettyName(bool dontTouchSocket, bool showId, Anonym
 {
     const bool anon = anonip == AnonymizeIP::Yes;
     const QString type = socket && !dontTouchSocket
-                         ? (isSsl() ? (isWebSocket() ? QStringLiteral("WSS") : QStringLiteral("SSL"))
-                                    : (isWebSocket() ? QStringLiteral("WS")  : QStringLiteral("TCP")))
+                         ? (isSsl() ? (isWebSocket() ? QStringLiteral("WSS") : (isHttp() ? QStringLiteral("HTTPS") : QStringLiteral("SSL")))
+                                    : (isWebSocket() ? QStringLiteral("WS")  : (isHttp() ? QStringLiteral("HTTP") : QStringLiteral("TCP"))))
                          : QStringLiteral("(NoSocket)");
     QString ip, port, idStr;
     if (!anon && socket && !dontTouchSocket && !socket->peerAddress().isNull())
@@ -109,6 +109,11 @@ bool AbstractConnection::isSsl() const
 }
 
 bool AbstractConnection::isWebSocket() const
+{
+    return false;
+}
+
+bool AbstractConnection::isHttp() const
 {
     return false;
 }
