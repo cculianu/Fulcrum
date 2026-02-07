@@ -3580,11 +3580,11 @@ void HttpClient::on_readyRead()
                 for (auto it = vmap.begin(); it != vmap.end(); ++it) {
                     // save header
                     req.header[it.key()] = it.value().toString();
-                    if (it.key() == "server.version") {
+                    if (it.key() == "Server-Version") {
                         try {
                             auto versionList = Json::parseUtf8(it.value().toString().toUtf8(), Json::ParseOption::RequireArray).toList();
                             auto pver = setServerVersion(versionList, false);
-                            response.headerExtra.append(QString("server.version: [\"%1\", \"%2\"]\r\n").arg(ServerMisc::AppSubVersion).arg(pver.toString()).toUtf8());
+                            response.headerExtra.append(QString("Server-Version: [\"%1\", \"%2\"]\r\n").arg(ServerMisc::AppSubVersion).arg(pver.toString()).toUtf8());
                         } catch (const std::exception &e) {
                             response.status = 400;
                             response.statusText = e.what();
@@ -3607,7 +3607,7 @@ void HttpClient::on_readyRead()
                 if (req.method == SimpleHttpServer::Method::POST) {
                     req.response.contentType = "application/json; charset=utf-8";
                 } else if (req.method == SimpleHttpServer::Method::OPTIONS) {
-                    response.headerExtra.append(QString("Access-Control-Allow-Methods: POST\r\nAccess-Control-Allow-Headers: content-type, server.version\r\n").toUtf8());
+                    response.headerExtra.append(QString("Access-Control-Allow-Methods: POST\r\nAccess-Control-Allow-Headers: content-type, Server-Version\r\n").toUtf8());
                     response.data = response.statusText;
                 }
                 // setup header
