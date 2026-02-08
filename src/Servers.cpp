@@ -1909,6 +1909,11 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
         // (in practice it won't be a huge problem).
         CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
+    impl_generic_send_sub_status(subs, c, batchId, m, key, status);
+}
+void Server::impl_generic_send_sub_status(SubsMgr *subs, Client *c, const RPC::BatchId batchId, const RPC::Message &m,
+                                          const HashX &key, const SubStatus &status)
+{
     if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
         generic_do_async(c, batchId, m.id, [key, subs] {
@@ -1943,6 +1948,24 @@ void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Batch
             DebugM("PerIP: ", c->peerAddress().toString(), " is no longer subscribed to any subscribables");
     }
     emit c->sendResult(batchId, m.id, QVariant(result));
+}
+// NOTE -- the below two methods are potentially slow if the client is abusing these RPCs -- since right now the SubsMgr
+// won't cache a darned thing if there is no real subscription backing this scriptHash -- which means each call must
+// do a full status recalculation, which can be potentially slow. For that reason I don't wish to add these two methods
+// to the protocol. This is just a PoC and/or exploration.
+void Server::rpc_blockchain_scripthash_get_status(Client *c, RPC::BatchId batchId, const RPC::Message &m)
+{
+    const auto sh = parseFirstHashParamCommon(m);
+    auto *subs = storage->subs();
+    auto status = subs->maybeGetCachedStatusResult(sh);
+    impl_generic_send_sub_status(subs, c, batchId, m, sh, status);
+}
+void Server::rpc_blockchain_address_get_status(Client *c, RPC::BatchId batchId, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    auto *subs = storage->subs();
+    auto status = subs->maybeGetCachedStatusResult(sh);
+    impl_generic_send_sub_status(subs, c, batchId, m, sh, status);
 }
 
 /* static */ std::weak_ptr<Server::LogFilter> Server::weakLogFilter;
@@ -2688,6 +2711,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.address.get_history",    true,               false,    PR{1,3},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
+    { {"blockchain.address.get_status",     true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_status) },
     { {"blockchain.address.listunspent",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_listunspent) },
     { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
     { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
@@ -2705,6 +2729,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.scripthash.get_first_use",  true,            false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_first_use) },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,3},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
+    { {"blockchain.scripthash.get_status",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_status) },
     { {"blockchain.scripthash.listunspent", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_listunspent) },
     { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_subscribe) },
     { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_unsubscribe) },

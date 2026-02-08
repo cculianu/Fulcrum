@@ -183,6 +183,9 @@ public:
     /// take the value and cache it -- only under very specific conditions.
     void maybeCacheStatusResult(const HashX &, const SubStatus &);
 
+    /// Thread-safe. Get a cached status, if any exists. The returned SubStatus will !has_value() if none exists.
+    SubStatus maybeGetCachedStatusResult(const HashX &key) const;
+
     /// Thread-safe. We do it this way because it's the fastest approach (uses C++17 unordered_set:::merge). After this
     /// call, s is modified and contains only the elements that were already pending (thus were not enqueued as they
     /// were already in the queue).  However since this is a move-based operation, s should officially be considered

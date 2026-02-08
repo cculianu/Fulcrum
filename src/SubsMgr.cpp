@@ -418,6 +418,22 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
     }
 }
 
+SubStatus SubsMgr::maybeGetCachedStatusResult(const HashX &key) const
+{
+    SubStatus ret;
+    if (!useStatusCache())
+        return ret;
+    if (SubRef sub = findExistingSubRef(key)) {
+        LockGuard g(sub->mut);
+        ret = sub->cachedStatus;
+    }
+    if (ret.has_value())
+        ++p->cacheHits;
+    else
+        ++p->cacheMisses;
+    return ret;
+}
+
 bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &key, bool updateTS)
 {
     bool ret = false;
