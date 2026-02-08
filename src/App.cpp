@@ -990,7 +990,7 @@ void App::parseArgs()
             }
         }
     }
-    // grab bind (listen) interfaces for HTPPS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
+    // grab bind (listen) interfaces for HTTPS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
     if (auto l = conf.hasValue("https") ? conf.values("https") : parser.values("https");  !l.isEmpty()) {
         parseInterfaces(options->httpsInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
@@ -1041,13 +1041,16 @@ void App::parseArgs()
         // If they are using https, allow --https-cert and --https-key (both must be present)
         // If the only secure port is https, allow -c/-k to be missing (use --https-cert and --https-key instead).
         // Otherwise if no cert and key combo, throw.
-        if ( cert.isEmpty() && (hasSSL || wssCert.isEmpty() || httpsCert.isEmpty()) )  {
+        if ( cert.isEmpty() && (hasSSL || (wssCert.isEmpty() && httpsCert.isEmpty())) )  {
             throw BadArgs(QString("%1 option requires both -c/--cert and -k/--key options be specified")
-                          .arg(hasSSL ? "SSL" : "WSS"));
+                          .arg(hasSSL ? "SSL" : (hasWSS ? "WSS" : "HTTPS")));
         }
         // if they are using the wss-port and wss-key options, they *better* have a wss port
         if ( !wssCert.isEmpty() && !hasWSS )
             throw BadArgs("wss-cert option specified but no WSS listening ports defined");
+        // if they are using the https-cert and https-key options, they *better* have an https port
+        if ( !httpsCert.isEmpty() && !hasHTTPS )
+            throw BadArgs("https-cert option specified but no HTTPS listening ports defined");
 
         // This sets up the actual ssl certificates, and also starts the monitoring task to
         // detect filesystem changes. Below may throw if there is a problem reading/processing
@@ -1304,6 +1307,28 @@ void App::parseArgs()
         else {
             options->torWss = val;
             Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_wss_port = " << val; });
+        }
+    }
+    if (conf.hasValue("tor_http_port")) {
+        bool ok = false;
+        int val = conf.intValue("tor_http_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("tor_http_port parse error: not an integer from 0 to 65535");
+        if (!val) options->torHttp.reset();
+        else {
+            options->torHttp = val;
+            Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_http_port = " << val; });
+        }
+    }
+    if (conf.hasValue("tor_https_port")) {
+        bool ok = false;
+        int val = conf.intValue("tor_https_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("tor_https_port parse error: not an integer from 0 to 65535");
+        if (!val) options->torHttps.reset();
+        else {
+            options->torHttps = val;
+            Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_https_port = " << val; });
         }
     }
     if (conf.hasValue("tor_proxy")) {

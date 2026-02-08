@@ -2765,7 +2765,7 @@ void ServerSSL::setupSslConfiguration()
 {
     const bool wasEmptyConf = sslConfiguration.isNull();
     const auto & [certInfo, wssCertInfo, httpsCertInfo] = options->certs.load(); // thread-safety: take a local copy
-    const QSslCertificate & cert = usesWS && wssCertInfo.has_value() ? wssCertInfo->cert : (usesHttp && httpsCertInfo.has_value() ? wssCertInfo->cert : certInfo.cert);
+    const QSslCertificate & cert = usesWS && wssCertInfo.has_value() ? wssCertInfo->cert : (usesHttp && httpsCertInfo.has_value() ? httpsCertInfo->cert : certInfo.cert);
     const QList<QSslCertificate> & chain = usesWS && wssCertInfo.has_value() ? wssCertInfo->certChain : (usesHttp && httpsCertInfo.has_value() ? httpsCertInfo->certChain : certInfo.certChain);
     const QSslKey & key = usesWS && wssCertInfo.has_value() ? wssCertInfo->key : (usesHttp && httpsCertInfo.has_value() ? httpsCertInfo->key : certInfo.key);
 
@@ -2792,6 +2792,11 @@ void ServerSSL::setUsesWebSockets(bool b) /* override */
 {
     ServerBase::setUsesWebSockets(b);
     setupSslConfiguration(); // need to re-set the ssl config in case wss-specific certs were specified by the user
+}
+void ServerSSL::setUsesHttp(bool b) /* override */
+{
+    ServerBase::setUsesHttp(b);
+    setupSslConfiguration(); // need to re-set the ssl config in case https-specific certs were specified by the user
 }
 QVariant ServerSSL::stats() const
 {
@@ -3653,6 +3658,12 @@ void HttpClient::on_readyRead()
                     auto value = toks.join(QStringLiteral(": "));
                     vmap[name] = value;
                     sock->setProperty("req-header", vmap);
+                    if (name.compare(QStringLiteral("Content-Length"), Qt::CaseInsensitive) == 0) {
+                        bool ok = false;
+                        const qint64 contentLength = value.toLongLong(&ok);
+                        if (!ok || contentLength < 0 || contentLength > DEFAULT_MAX_BUFFER)
+                            throw Exception(QString("Content-Length %1 exceeds limit or is invalid").arg(value));
+                    }
                 } else
                     throw Exception("garbage data, closing connection");
             }
@@ -3665,6 +3676,7 @@ void HttpClient::on_readyRead()
         Warning() << "Client: " << sockName << "; " << e.what();
         sock->abort();
         sock->deleteLater();
+        return;
     }
 
     Client::on_readyRead();

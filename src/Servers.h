@@ -558,6 +558,9 @@ public:
     /// Overides ServerBase -- re-sets the SSL config (sometimes WSS uses a different config from regular SSL ports).
     /// Do not call this after the server has already been started.
     void setUsesWebSockets(bool b) override;
+    /// Overrides ServerBase -- re-sets the SSL config (HTTPS may use a different config from regular SSL ports).
+    /// Do not call this after the server has already been started.
+    void setUsesHttp(bool b) override;
 
 public slots:
     /// Normally called from c'tor, but may be called as a result of a connection to SSLCertMonitor's certInfoChanged()

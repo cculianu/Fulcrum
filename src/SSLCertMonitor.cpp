@@ -157,7 +157,7 @@ Options::Certs SSLCertMonitor::readCerts() const
         certs.wssCertInfo = SSLCertMonitor::makeCertInfo(this, wssCert, wssKey);
     }
     if (!httpsCert.isEmpty()) {
-        if (httpsKey.isEmpty()) throw InternalError("Internal Error: wss-key is empty"); // sanity check
+        if (httpsKey.isEmpty()) throw InternalError("Internal Error: https-key is empty"); // sanity check
         certs.httpsCertInfo = SSLCertMonitor::makeCertInfo(this, httpsCert, httpsKey);
     }
     return certs;

@@ -116,7 +116,7 @@ QVariantMap Options::toMap() const
             m["wss-cert"] = wssCertInfo->file;
             m["wss-key"] = wssCertInfo->keyFile;
         }
-        if (wssCertInfo.has_value()) {
+        if (httpsCertInfo.has_value()) {
             m["https-cert"] = httpsCertInfo->file;
             m["https-key"] = httpsCertInfo->keyFile;
         }
