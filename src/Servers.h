@@ -461,9 +461,10 @@ private:
     void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
     void impl_generic_subscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
                                 const std::optional<QString> & aliasUsedForNotifications = {});
-    void impl_generic_send_sub_status(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
-                                      const SubStatus &status);
     void impl_generic_unsubscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key);
+    void impl_generic_send_sub_status(SubsMgr *, Client *, RPC::BatchId, const RPC::Message::Id &, const HashX &key,
+                                      const SubStatus &status);
+    void impl_generic_get_status(Client *, RPC::BatchId, const RPC::Message::Id &, const HashX &key);
     void impl_blockchain_header_get(Client *, RPC::BatchId, const RPC::Message::Id &, BlockHeight);
     /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
     /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.

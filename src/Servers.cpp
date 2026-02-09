@@ -1909,14 +1909,14 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
         // (in practice it won't be a huge problem).
         CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
-    impl_generic_send_sub_status(subs, c, batchId, m, key, status);
+    impl_generic_send_sub_status(subs, c, batchId, m.id, key, status);
 }
-void Server::impl_generic_send_sub_status(SubsMgr *subs, Client *c, const RPC::BatchId batchId, const RPC::Message &m,
+void Server::impl_generic_send_sub_status(SubsMgr *subs, Client *c, const RPC::BatchId batchId, const RPC::Message::Id &mId,
                                           const HashX &key, const SubStatus &status)
 {
     if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
-        generic_do_async(c, batchId, m.id, [key, subs] {
+        generic_do_async(c, batchId, mId, [key, subs] {
             const auto status = subs->getFullStatus(key);
             subs->maybeCacheStatusResult(key, status);
             // if empty we return `null`, otherwise we return hex encoded bytes, json object, or numeric as the immediate status.
@@ -1925,7 +1925,7 @@ void Server::impl_generic_send_sub_status(SubsMgr *subs, Client *c, const RPC::B
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
         const QVariant result = status.toVariant();
-        emit c->sendResult(batchId, m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
+        emit c->sendResult(batchId, mId, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
     }
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
@@ -1949,23 +1949,21 @@ void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Batch
     }
     emit c->sendResult(batchId, m.id, QVariant(result));
 }
-// NOTE -- the below two methods are potentially slow if the client is abusing these RPCs -- since right now the SubsMgr
-// won't cache a darned thing if there is no real subscription backing this scriptHash -- which means each call must
-// do a full status recalculation, which can be potentially slow. For that reason I don't wish to add these two methods
-// to the protocol. This is just a PoC and/or exploration.
-void Server::rpc_blockchain_scripthash_get_status(Client *c, RPC::BatchId batchId, const RPC::Message &m)
+void Server::impl_generic_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message::Id &mId, const HashX &key)
+{
+    auto *subs = storage->subs();
+    const auto & [wasnew, status] = subs->subscribe(c, key, {} /* Null function indicates "weak" sub */);
+    impl_generic_send_sub_status(subs, c, batchId, mId, key, status);
+}
+void Server::rpc_blockchain_scripthash_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    auto *subs = storage->subs();
-    auto status = subs->maybeGetCachedStatusResult(sh);
-    impl_generic_send_sub_status(subs, c, batchId, m, sh, status);
+    impl_generic_get_status(c, batchId, m.id, sh);
 }
-void Server::rpc_blockchain_address_get_status(Client *c, RPC::BatchId batchId, const RPC::Message &m)
+void Server::rpc_blockchain_address_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    auto *subs = storage->subs();
-    auto status = subs->maybeGetCachedStatusResult(sh);
-    impl_generic_send_sub_status(subs, c, batchId, m, sh, status);
+    impl_generic_get_status(c, batchId, m.id, sh);
 }
 
 /* static */ std::weak_ptr<Server::LogFilter> Server::weakLogFilter;

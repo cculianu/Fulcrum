@@ -128,7 +128,9 @@ public:
     ///
     /// `notifyCB` is called for update notifications asynchronously as the tx history for `sh` changes. It will always
     /// be called in the `client`'s thread.  If the client is deleted, all context for the client is cleaned-up
-    /// automatically, and the subscription dereferenced.
+    /// automatically, and the subscription dereferenced. Pass a null `notifyCB` if you wish to benefit from the "weak"
+    /// subscription mechanism which is a hack of sorts to get blockchain.scripthash.get_status working and caching
+    /// calculated results.
     ///
     /// Multiple calls to this function for the same client + scripthash combination overwrite previous notifyCB
     /// callback registrations for the subscription. Thus each client + scripthash combo can only have at most 1 active
@@ -182,9 +184,6 @@ public:
     /// Thread-safe.  Client calls this to maybe save the status hash it just got from getFullStatus. We don't always
     /// take the value and cache it -- only under very specific conditions.
     void maybeCacheStatusResult(const HashX &, const SubStatus &);
-
-    /// Thread-safe. Get a cached status, if any exists. The returned SubStatus will !has_value() if none exists.
-    SubStatus maybeGetCachedStatusResult(const HashX &key) const;
 
     /// Thread-safe. We do it this way because it's the fastest approach (uses C++17 unordered_set:::merge). After this
     /// call, s is modified and contains only the elements that were already pending (thus were not enqueued as they
