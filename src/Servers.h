@@ -743,6 +743,13 @@ protected:
     QByteArray wrapForSend(QByteArray &&) override;
     void on_readyRead() override;
     void cleanupForNextRequest();
+
+    QMap<QString, QString> reqHeader;
+    QString reqLoc;
+    QString reqMeth;
+    QString reqVer;
+    qint64 respLen = 0;
+    QByteArray pendingResponseHeader;
 };
 
 namespace detail {

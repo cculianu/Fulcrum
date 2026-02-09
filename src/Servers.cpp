@@ -3522,37 +3522,36 @@ HttpClient::~HttpClient()
 }
 
 void HttpClient::cleanupForNextRequest() {
-    socket->setProperty("req-header", QVariantMap());
-    socket->setProperty("req-loc", QString());
-    socket->setProperty("req-meth", QString());
-    socket->setProperty("req-ver", QString());
+    reqHeader.clear();
+    reqLoc.clear();
+    reqMeth.clear();
+    reqVer.clear();
+    pendingResponseHeader.clear();
+    respLen = 0;
 }
 
 QByteArray HttpClient::wrapForSend(QByteArray && data)
 {
-    // prepare the rest of the header
-    QByteArray responseHeader;
-    {
-        QTextStream ss(&responseHeader, QIODevice::WriteOnly);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-        ss.setCodec("UTF-8");
-#else
-        ss.setEncoding(QStringConverter::Utf8);
-#endif
-        ss << "Content-Length: " << data.length() << "\r\n";
-        ss << "\r\n";
-    }
+    static const QByteArray NL("\r\n");
+    static const QByteArray CONTENT_LENGTH("Content-Length: ");
 
-    const qint64 respTotalLen = socket->property("resp-len").toLongLong() + responseHeader.length() + data.length();
-    socket->setProperty("resp-len", respTotalLen);
+    const QByteArray clenStr = QByteArray::number(data.length());
 
-    // write out the header
-    emit send(responseHeader);
+    // Build the complete response: pending header + Content-Length + separator + data
+    QByteArray payload;
+    payload.reserve(pendingResponseHeader.size() + CONTENT_LENGTH.size() + clenStr.size()
+                    + NL.size() + NL.size() + data.size());
+    payload += pendingResponseHeader;
+    payload += CONTENT_LENGTH; payload += clenStr; payload += NL;
+    payload += NL;
+    payload += data;
+    data.clear();
+
+    respLen += payload.size();
 
     cleanupForNextRequest();
 
-    // let the base class write the response to socket
-    return std::move(data);
+    return payload;
 }
 
 void HttpClient::on_readyRead()
@@ -3564,30 +3563,26 @@ void HttpClient::on_readyRead()
         while(sock->canReadLine()) {
             auto line = QString(sock->readLine()).trimmed();
             // DebugM(sockName, " Got line: ", line);
-            if (QString loc = sock->property("req-loc").toString(); loc.isEmpty()) {
+            if (reqLoc.isEmpty()) {
                 auto toks = line.split(' ');
                 if (toks.length() != 3 || (toks[0] != "OPTIONS" && toks[0] != "POST") || toks[2] != "HTTP/1.1")
                     throw Exception(QString("Invalid request: %1").arg(line));
                 TraceM(sockName, " ", line);
-                sock->setProperty("req-loc", toks[1]);
-                sock->setProperty("req-meth", toks[0]);
-                sock->setProperty("req-ver", toks[2]);
-            } else if (auto loc = sock->property("req-loc").toString(),
-                            meth = sock->property("req-meth").toString(),
-                            ver = sock->property("req-ver").toString();
-                        line.isEmpty() && !loc.isEmpty() && !meth.isEmpty() && !ver.isEmpty()) {
+                reqLoc = toks[1];
+                reqMeth = toks[0];
+                reqVer = toks[2];
+            } else if (line.isEmpty() && !reqLoc.isEmpty() && !reqMeth.isEmpty() && !reqVer.isEmpty()) {
                 // got line by itself, prepare response
                 SimpleHttpServer::Request req;
                 auto & response = req.response;
-                req.httpVersion = ver;
-                req.method = meth == "OPTIONS" ? SimpleHttpServer::Method::OPTIONS : SimpleHttpServer::Method::POST;
-                auto vmap = sock->property("req-header").toMap();
-                for (auto it = vmap.begin(); it != vmap.end(); ++it) {
+                req.httpVersion = reqVer;
+                req.method = reqMeth == "OPTIONS" ? SimpleHttpServer::Method::OPTIONS : SimpleHttpServer::Method::POST;
+                for (auto it = reqHeader.begin(); it != reqHeader.end(); ++it) {
                     // save header
-                    req.header[it.key()] = it.value().toString();
+                    req.header[it.key()] = it.value();
                     if (it.key() == "Server-Version") {
                         try {
-                            auto versionList = Json::parseUtf8(it.value().toString().toUtf8(), Json::ParseOption::RequireArray).toList();
+                            auto versionList = Json::parseUtf8(it.value().toUtf8(), Json::ParseOption::RequireArray).toList();
                             auto pver = setServerVersion(versionList, false);
                             response.headerExtra.append(QString("Server-Version: [\"%1\", \"%2\"]\r\n").arg(ServerMisc::AppSubVersion).arg(pver.toString()).toUtf8());
                         } catch (const std::exception &e) {
@@ -3597,13 +3592,13 @@ void HttpClient::on_readyRead()
                         }
                     }
                 }
-                    
-                if (auto i = loc.indexOf('?'); i > -1) {
-                    req.queryString = loc.mid(i+1);
-                    req.endPoint = loc.left(i);
+
+                if (auto i = reqLoc.indexOf('?'); i > -1) {
+                    req.queryString = reqLoc.mid(i+1);
+                    req.endPoint = reqLoc.left(i);
                 } else
-                    req.endPoint = loc;
-                if (loc != "/") {
+                    req.endPoint = reqLoc;
+                if (reqLoc != "/") {
                     // could not find any enpoints that match, set up a 404 response
                     response.status = 404;
                     response.statusText = "Unknown resource";
@@ -3616,48 +3611,40 @@ void HttpClient::on_readyRead()
                     response.data = response.statusText;
                 }
                 // setup header
+                static const QByteArray NL("\r\n");
+                static const QByteArray HTTP11("HTTP/1.1 ");
+                static const QByteArray CONTENT_TYPE("Content-Type: ");
+                static const QByteArray CONTENT_LENGTH("Content-Length: ");
+                static const QByteArray CORS("Access-Control-Allow-Origin: ");
                 QByteArray responseHeader;
-                {
-                    QTextStream ss(&responseHeader, QIODevice::WriteOnly);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-                    ss.setCodec("UTF-8");
-#else
-                    ss.setEncoding(QStringConverter::Utf8);
-#endif
-                    ss << "HTTP/1.1 " << response.status << " " << req.response.statusText.trimmed() << "\r\n";
-                    ss << "Content-Type: " << response.contentType.trimmed() << "\r\n";
-                    ss << response.headerExtra;
-                    if (options.httpCorsDomain.length()) {
-                        ss << "Access-Control-Allow-Origin: " << options.httpCorsDomain << "\r\n";
-                    }
-                    if (response.data.length()) {
-                        ss << "Content-Length: " << response.data.length() << "\r\n";
-                        ss << "\r\n";
-                    }
+                responseHeader += HTTP11; responseHeader += QByteArray::number(response.status); responseHeader += ' '; responseHeader += req.response.statusText.trimmed(); responseHeader += NL;
+                responseHeader += CONTENT_TYPE; responseHeader += response.contentType.trimmed(); responseHeader += NL;
+                responseHeader += response.headerExtra;
+                if (options.httpCorsDomain.length()) {
+                    responseHeader += CORS; responseHeader += options.httpCorsDomain.toUtf8(); responseHeader += NL;
                 }
-                const qint64 respTotalLen = responseHeader.length() + response.data.length();
-                sock->setProperty("resp-len", respTotalLen);
-                // write out header
-                emit send(responseHeader);
-                if (response.data.length())
-                    // write out response data
-                    emit send(response.data);
-
+                if (response.data.length()) {
+                    responseHeader += CONTENT_LENGTH; responseHeader += QByteArray::number(response.data.length()); responseHeader += NL;
+                    responseHeader += NL;
+                }
                 if (req.method != SimpleHttpServer::Method::POST || response.status != 200) {
-                    // done with this request, clear saved state
+                    // Non-POST-200: full response is ready, send it all now
+                    respLen = responseHeader.length() + response.data.length();
+                    emit send(responseHeader);
+                    if (response.data.length())
+                        emit send(response.data);
                     cleanupForNextRequest();
-
                     return;
                 }
+                // POST 200: store partial header; wrapForSend() will add Content-Length and data
+                pendingResponseHeader = responseHeader;
             } else {
                 // save params
-                auto vmap = sock->property("req-header").toMap();
                 auto toks = line.split(QStringLiteral(": "));
                 if (toks.length() >= 2) {
                     auto name = toks.front(); toks.pop_front();
                     auto value = toks.join(QStringLiteral(": "));
-                    vmap[name] = value;
-                    sock->setProperty("req-header", vmap);
+                    reqHeader[name] = value;
                     if (name.compare(QStringLiteral("Content-Length"), Qt::CaseInsensitive) == 0) {
                         bool ok = false;
                         const qint64 contentLength = value.toLongLong(&ok);
