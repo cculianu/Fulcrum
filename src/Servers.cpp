@@ -1891,13 +1891,7 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
         /// is fine since clients will cope with the situation, but... ideally, fixme.
         result = subs->subscribe(c, key, MkNotifierLambda());
     } catch (const SubsMgr::LimitReached &e) {
-        if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
-            // rate limit printing
-            Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
-            lastSubsWarningPrintTime = Util::getTimeSecs();
-        }
-        emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
-        throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
+        impl_generic_handle_subs_limitreached_exc(c, e); // will rethrow as RPCError
     }
     const auto & [wasNew, status] = result;
     if (wasNew) {
@@ -1928,6 +1922,16 @@ void Server::impl_generic_send_sub_status(SubsMgr *subs, Client *c, const RPC::B
         emit c->sendResult(batchId, mId, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
     }
 }
+[[noreturn]] void Server::impl_generic_handle_subs_limitreached_exc(Client *c, const Exception &e)
+{
+    if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
+        // rate limit printing
+        Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
+        lastSubsWarningPrintTime = Util::getTimeSecs();
+    }
+    emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
+    throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
+}
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
@@ -1952,8 +1956,12 @@ void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Batch
 void Server::impl_generic_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message::Id &mId, const HashX &key)
 {
     auto *subs = storage->subs();
-    const auto & [wasnew, status] = subs->subscribe(c, key, {} /* Null function indicates "weak" sub */);
-    impl_generic_send_sub_status(subs, c, batchId, mId, key, status);
+    try {
+        const auto & [wasnew, status] = subs->subscribe(c, key, {} /* Null function indicates "weak" sub */);
+        impl_generic_send_sub_status(subs, c, batchId, mId, key, status);
+    } catch (const SubsMgr::LimitReached &e) {
+        impl_generic_handle_subs_limitreached_exc(c, e); // will rethrow as RPCError
+    }
 }
 void Server::rpc_blockchain_scripthash_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {

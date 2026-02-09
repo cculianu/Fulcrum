@@ -465,6 +465,7 @@ private:
     void impl_generic_send_sub_status(SubsMgr *, Client *, RPC::BatchId, const RPC::Message::Id &, const HashX &key,
                                       const SubStatus &status);
     void impl_generic_get_status(Client *, RPC::BatchId, const RPC::Message::Id &, const HashX &key);
+    [[noreturn]] void impl_generic_handle_subs_limitreached_exc(Client *, const Exception &e); // always throws
     void impl_blockchain_header_get(Client *, RPC::BatchId, const RPC::Message::Id &, BlockHeight);
     /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
     /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
