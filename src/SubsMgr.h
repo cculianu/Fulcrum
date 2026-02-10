@@ -128,14 +128,19 @@ public:
     ///
     /// `notifyCB` is called for update notifications asynchronously as the tx history for `sh` changes. It will always
     /// be called in the `client`'s thread.  If the client is deleted, all context for the client is cleaned-up
-    /// automatically, and the subscription dereferenced.
+    /// automatically, and the subscription dereferenced. Pass a null `notifyCB` if you wish to benefit from the "weak"
+    /// subscription mechanism which is a hack of sorts to get blockchain.scripthash.get_status working and caching
+    /// calculated results.
     ///
-    /// Multiple calls to this function for the same client + scripthash combination overwrite previous notifyCB
-    /// callback registrations for the subscription. Thus each client + scripthash combo can only have at most 1 active
-    /// notifyCB extant at any time.
+    /// Unless `notifyCB` is null, multiple calls to this function for the same client + scripthash combination will
+    /// overwrite previous non-null `notifyCB` callback registrations for the subscription. Thus each
+    /// client + scripthash combo can only have at most 1 active non-null `notifyCB` extant at any time. (If `notifyCB`
+    /// is null, the current client + scripthash notification callbacks that existed, if any, are left unmolested.)
     ///
     /// Returns .first = true if the subscription for this client is new, or false if it replaced a previous subscription.
-    /// In either case the client is now subscribed to the scripthash in question.
+    /// Note that if called with a null `notifyCB`, .first will be false since this isn't a "real" new subscription.
+    /// In the non-null `notifyCB` case, the client is now subscribed to the scripthash in question. In the null
+    /// `notifyCB` case, the client is not subscribed at all, and we only query for any cached status hashes.
     ///
     /// The .second of the pair is a cached StatusHash (if known).  Note the StatusHash may be defined but an empty
     /// QByteArray if there is no history for the scripthash.  If the SubStatus !has_value, then we don't have a cached

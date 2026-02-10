@@ -1891,13 +1891,7 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
         /// is fine since clients will cope with the situation, but... ideally, fixme.
         result = subs->subscribe(c, key, MkNotifierLambda());
     } catch (const SubsMgr::LimitReached &e) {
-        if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
-            // rate limit printing
-            Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
-            lastSubsWarningPrintTime = Util::getTimeSecs();
-        }
-        emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
-        throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
+        impl_generic_handle_subs_limitreached_exc(c, e); // will rethrow as RPCError
     }
     const auto & [wasNew, status] = result;
     if (wasNew) {
@@ -1909,9 +1903,14 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
         // (in practice it won't be a huge problem).
         CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
+    impl_generic_send_sub_status(subs, c, batchId, m.id, key, status);
+}
+void Server::impl_generic_send_sub_status(SubsMgr *subs, Client *c, const RPC::BatchId batchId, const RPC::Message::Id &mId,
+                                          const HashX &key, const SubStatus &status)
+{
     if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
-        generic_do_async(c, batchId, m.id, [key, subs] {
+        generic_do_async(c, batchId, mId, [key, subs] {
             const auto status = subs->getFullStatus(key);
             subs->maybeCacheStatusResult(key, status);
             // if empty we return `null`, otherwise we return hex encoded bytes, json object, or numeric as the immediate status.
@@ -1920,8 +1919,18 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
         const QVariant result = status.toVariant();
-        emit c->sendResult(batchId, m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
+        emit c->sendResult(batchId, mId, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
     }
+}
+[[noreturn]] void Server::impl_generic_handle_subs_limitreached_exc(Client *c, const Exception &e)
+{
+    if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
+        // rate limit printing
+        Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
+        lastSubsWarningPrintTime = Util::getTimeSecs();
+    }
+    emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
+    throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -1943,6 +1952,26 @@ void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Batch
             DebugM("PerIP: ", c->peerAddress().toString(), " is no longer subscribed to any subscribables");
     }
     emit c->sendResult(batchId, m.id, QVariant(result));
+}
+void Server::impl_generic_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message::Id &mId, const HashX &key)
+{
+    auto *subs = storage->subs();
+    try {
+        const auto & [wasnew, status] = subs->subscribe(c, key, {} /* Null function indicates "weak" sub */);
+        impl_generic_send_sub_status(subs, c, batchId, mId, key, status);
+    } catch (const SubsMgr::LimitReached &e) {
+        impl_generic_handle_subs_limitreached_exc(c, e); // will rethrow as RPCError
+    }
+}
+void Server::rpc_blockchain_scripthash_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    const auto sh = parseFirstHashParamCommon(m);
+    impl_generic_get_status(c, batchId, m.id, sh);
+}
+void Server::rpc_blockchain_address_get_status(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_generic_get_status(c, batchId, m.id, sh);
 }
 
 /* static */ std::weak_ptr<Server::LogFilter> Server::weakLogFilter;
@@ -2688,6 +2717,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.address.get_history",    true,               false,    PR{1,3},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
+    { {"blockchain.address.get_status",     true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_status) },
     { {"blockchain.address.listunspent",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_listunspent) },
     { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
     { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
@@ -2705,6 +2735,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.scripthash.get_first_use",  true,            false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_first_use) },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,3},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
+    { {"blockchain.scripthash.get_status",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_status) },
     { {"blockchain.scripthash.listunspent", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_listunspent) },
     { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_subscribe) },
     { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_unsubscribe) },

@@ -315,16 +315,27 @@ auto SubsMgr::findExistingSubRef(const HashX &key) const -> SubRef
 
 auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCallback &notifyCB) -> SubscribeResult
 {
-    const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
+    std::optional<Tic> t0 [[maybe_unused]];
+    if constexpr (debugPrint) t0.emplace();
     const bool useCache = useStatusCache();
-    if (!notifyCB) [[unlikely]]
-        throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
 
     SubscribeResult ret = { false, {} };
     auto [sub, wasnew] = getOrMakeSubRef(key); // may throw LimitReached
     {
         LockGuard g(sub->mut);
-        if (!wasnew && sub->subscribedClientIds.count(c->id)) {
+        if (!notifyCB) {
+            // "Weak" subscription -- a hack to just get the status and create a zombie that keeps the status cached;
+            // used by blockchain.scripthash.get_status; no actual status change notifications will be set up for
+            // sending as a result of this invocation of subscribe(). Existing non-weak subscriptions (if any) will
+            // remain unaffected.
+            ret.first = false; /* We *always* "pretend" this was not a "new" sub in the weak sub mode, so that calling
+                                  code in Servers.cpp always does the right thing and doesn't increment per-client
+                                  counters. */
+            if constexpr (debugPrint)
+                Debug() << "\"Weak\" subscription received for client: " << c->id
+                        << ", sh: " << Util::Ellipsify(Util::ToHexFast(key), 8)
+                        << ", is zombie?: " << sub->subscribedClientIds.empty();
+        } else if (!wasnew && sub->subscribedClientIds.count(c->id)) {
             // already had a sub for this client, disconnect it because we will re-add the new functor below
             bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
             if constexpr (debugPrint) Debug() << "Existing sub disconnected signal: " << (res ? "ok" : "not ok!");
@@ -353,9 +364,11 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCa
             ret.second = sub->cachedStatus;
         }
         sub->updateTS(); // our basic 'mtime'
-        auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
-        if (!conn) [[unlikely]]
-            throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
+        if (notifyCB) {
+            auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
+            if (!conn) [[unlikely]]
+                throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
+        }
     }
 
     if (useCache) {
@@ -366,8 +379,8 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCa
     }
 
     if constexpr (debugPrint) {
-        const auto elapsed = Util::getTimeNS() - t0;
-        Debug() << "subscribed " << Util::ToHexFast(key) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+        Debug() << (!notifyCB ? "weakly " : "") << "subscribed " << Util::ToHexFast(key) << " in "
+                << (t0 ? t0->msecStr() : QString{"???"}) << " msec";
     }
     return ret;
 }
