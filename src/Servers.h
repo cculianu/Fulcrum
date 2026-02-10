@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2026 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -140,6 +140,7 @@ class Client;
 class QSslSocket;
 class Storage;
 class SubsMgr;
+class SubStatus;
 class ThreadPool;
 
 /// Base class for the Electrum-server-style linefeed-based JSON-RPC service.
@@ -410,6 +411,7 @@ private:
     void rpc_blockchain_address_listunspent(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_status(Client *, RPC::BatchId, const RPC::Message &); // Fulcrum 2.1.1 or above
     // blockchain misc
     void rpc_blockchain_block_header(Client *, RPC::BatchId, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -427,6 +429,7 @@ private:
     void rpc_blockchain_scripthash_listunspent(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_get_status(Client *, RPC::BatchId, const RPC::Message &); // Fulcrum 2.1.1 or above
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_broadcast_package(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.6.0
@@ -467,6 +470,10 @@ private:
     void impl_generic_subscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
                                 const std::optional<QString> & aliasUsedForNotifications = {});
     void impl_generic_unsubscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key);
+    void impl_generic_send_sub_status(SubsMgr *, Client *, RPC::BatchId, const RPC::Message::Id &, const HashX &key,
+                                      const SubStatus &status);
+    void impl_generic_get_status(Client *, RPC::BatchId, const RPC::Message::Id &, const HashX &key);
+    [[noreturn]] void impl_generic_handle_subs_limitreached_exc(Client *, const Exception &e); // always throws
     void impl_blockchain_header_get(Client *, RPC::BatchId, const RPC::Message::Id &, BlockHeight);
     /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
     /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
