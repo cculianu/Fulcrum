@@ -223,23 +223,27 @@ namespace BTC
     {
         using namespace bitcoin;
         CScript ret;
-        if (const auto len = _hash.length(); len == int(H160Len)) {
+        const Byte * const hbegin = reinterpret_cast<const Byte *>(&*_hash.cbegin());
+        const Byte * const hend = reinterpret_cast<const Byte *>(&*_hash.cend());
+        if (const size_t len = _hash.length(); len == H160Len) {
+            static_assert(H160Len < OP_PUSHDATA1);
             if (_kind == P2PKH || _kind == TOKEN_P2PKH) {
                 ret << OP_DUP << OP_HASH160;
                 ret.insert(ret.end(), uint8_t(len)); // push length
-                ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push h160
+                ret.insert(ret.end(), hbegin, hend); // push h160
                 ret << OP_EQUALVERIFY << OP_CHECKSIG;
             } else if (_kind == P2SH || _kind == TOKEN_P2SH) {
                 ret << OP_HASH160;
                 ret.insert(ret.end(), uint8_t(len)); // push length
-                ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push h160
+                ret.insert(ret.end(), hbegin, hend); // push h160
                 ret << OP_EQUAL;
             }
-        } else if (len == int(H256Len) && (_kind == P2SH || _kind == TOKEN_P2SH)) {
+        } else if (len == H256Len && (_kind == P2SH || _kind == TOKEN_P2SH)) {
+            static_assert(H256Len < OP_PUSHDATA1);
             ret.reserve(len + 3); // long script exceeds the 28-byte static_capacity of CScript, so pre-reserve.
             ret << OP_HASH256;
             ret.insert(ret.end(), uint8_t(len)); // push length
-            ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push h256
+            ret.insert(ret.end(), hbegin, hend); // push h256
             ret << OP_EQUAL;
         }
         return ret;
