@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2016 The Bitcoin Core developers
+// Copyright (c) 2009-2026 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -277,17 +277,18 @@ public:
 
     bool operator()(const CKeyID &keyID) const {
         script->clear();
-        *script << OP_DUP << OP_HASH160 << ToByteVector(keyID) << OP_EQUALVERIFY
-                << OP_CHECKSIG;
+        *script << OP_DUP << OP_HASH160 << keyID << OP_EQUALVERIFY << OP_CHECKSIG;
         return true;
     }
 
     bool operator()(const ScriptID &scriptID) const {
         script->clear();
         if (scriptID.IsP2SH_20())
-            *script << OP_HASH160 << ToByteVector(scriptID) << OP_EQUAL;
-        else
-            *script << OP_HASH256 << ToByteVector(scriptID) << OP_EQUAL;
+            *script << OP_HASH160 << scriptID << OP_EQUAL;
+        else {
+            script->reserve(3 + scriptID.size());
+            *script << OP_HASH256 << scriptID << OP_EQUAL;
+        }
         return true;
     }
 };
@@ -313,19 +314,18 @@ CScript GetScriptForRawPubKey(const CPubKey &pubKey) {
                      << OP_CHECKSIG;
 }
 
-CScript GetScriptForMultisig(int nRequired, const std::vector<CPubKey> &keys) {
+CScript GetScriptForMultisig(unsigned nRequired, const std::vector<CPubKey> &keys) {
     CScript script;
 
     script << CScript::EncodeOP_N(nRequired);
     for (const CPubKey &key : keys) {
-        script << ToByteVector(key);
+        script << key;
     }
     script << CScript::EncodeOP_N(keys.size()) << OP_CHECKMULTISIG;
     return script;
 }
 
 bool IsValidDestination(const CTxDestination &dest) {
-    //return dest.which() != 0;
     return dest.index() != 0;
 }
 

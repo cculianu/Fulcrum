@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2016 The Bitcoin Core developers
+// Copyright (c) 2009-2026 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -15,6 +15,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -46,10 +47,6 @@ inline constexpr int MAX_SCRIPT_SIZE = 10000;
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp. Thresold is Tue Nov 5 00:53:20 1985 UTC
 inline constexpr unsigned int LOCKTIME_THRESHOLD = 500000000;
-
-template <typename T> std::vector<uint8_t> ToByteVector(const T &in) {
-    return std::vector<uint8_t>(in.begin(), in.end());
-}
 
 /** Script opcodes */
 enum opcodetype {
@@ -666,7 +663,18 @@ public:
         return *this;
     }
 
-    CScript &operator<<(const std::vector<uint8_t> &b) {
+    /// Append a byte blob to the script, including the pushdata opcode, if any, and the length byte(s) prepended.
+    ///
+    /// Note that unlike the streams classes in streams.h, pushing a vector vs pushing a span (ByteView) will yield
+    /// identical results, with the length byte(s) *always* present; e.g. the following are identical:
+    ///     `script << someVector`
+    ///     `script << std::span{someVector}`
+    CScript &operator<<(const std::span<const uint8_t> &b) {
+        if (!b.empty() && b.data() >= begin() && b.data() < end()) [[unlikely]] {
+            // Detect class mis-use which may result in UB: an attempt to push a (sub)script onto itself, and compensate
+            // by allocating a temporary vector to hold the bytes to be pushed.
+            return this->operator<<(std::span<const uint8_t>{std::vector<uint8_t>(b.begin(), b.end())});
+        }
         if (b.size() < OP_PUSHDATA1) {
             insert(end(), uint8_t(b.size()));
         } else if (b.size() <= 0xff) {
@@ -687,15 +695,15 @@ public:
         return *this;
     }
 
-
-    CScript &operator<<(const CScript &b) {
-        // I'm not sure if this should push the script or concatenate scripts.
-        // If there's ever a use for pushing a script onto a script, delete this
-        // member fn.
-        assert(!"Warning: Pushing a CScript onto a CScript with << is probably "
-                "not intended, use + to concatenate!");
-        return *this;
+    CScript &operator<<(const std::span<const std::byte> &b) {
+        const uint8_t *const p = reinterpret_cast<const uint8_t *>(b.data());
+        return this->operator<<(std::span<const uint8_t>{p, b.size()});
     }
+
+    /// Intentionally unimplemented; it's not clear if this should push the script or concatenate scripts. If there's
+    /// ever a need for pushing one script onto another script, one may cast the argument to a span, e.g.:
+    ///     `script << std::span<const uint8_t>{otherScript}`
+    CScript &operator<<(const CScript &b) = delete;
 
     bool GetOp(iterator &pc, opcodetype &opcodeRet,
                std::vector<uint8_t> &vchRet) {

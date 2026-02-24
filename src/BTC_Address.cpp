@@ -29,6 +29,7 @@
 #include <QHashFunctions>
 
 #include <mutex>
+#include <span>
 #include <utility>
 
 #ifdef ENABLE_TESTS
@@ -223,28 +224,16 @@ namespace BTC
     {
         using namespace bitcoin;
         CScript ret;
-        const Byte * const hbegin = reinterpret_cast<const Byte *>(&*_hash.cbegin());
-        const Byte * const hend = reinterpret_cast<const Byte *>(&*_hash.cend());
+        const auto hbytes = std::as_bytes(std::span{_hash});
         if (const size_t len = _hash.length(); len == H160Len) {
-            static_assert(H160Len < OP_PUSHDATA1);
             if (_kind == P2PKH || _kind == TOKEN_P2PKH) {
-                ret << OP_DUP << OP_HASH160;
-                ret.insert(ret.end(), uint8_t(len)); // push length
-                ret.insert(ret.end(), hbegin, hend); // push h160
-                ret << OP_EQUALVERIFY << OP_CHECKSIG;
+                ret << OP_DUP << OP_HASH160 << hbytes << OP_EQUALVERIFY << OP_CHECKSIG;
             } else if (_kind == P2SH || _kind == TOKEN_P2SH) {
-                ret << OP_HASH160;
-                ret.insert(ret.end(), uint8_t(len)); // push length
-                ret.insert(ret.end(), hbegin, hend); // push h160
-                ret << OP_EQUAL;
+                ret << OP_HASH160 << hbytes << OP_EQUAL;
             }
         } else if (len == H256Len && (_kind == P2SH || _kind == TOKEN_P2SH)) {
-            static_assert(H256Len < OP_PUSHDATA1);
-            ret.reserve(len + 3); // long script exceeds the 28-byte static_capacity of CScript, so pre-reserve.
-            ret << OP_HASH256;
-            ret.insert(ret.end(), uint8_t(len)); // push length
-            ret.insert(ret.end(), hbegin, hend); // push h256
-            ret << OP_EQUAL;
+            ret.reserve(len + 3u); // long script exceeds the 28-byte static_capacity of CScript, so pre-reserve.
+            ret << OP_HASH256 << hbytes << OP_EQUAL;
         }
         return ret;
     }
