@@ -717,7 +717,7 @@ namespace RPC {
         // TODO: In the non-WebSocket case, scanning for '\n' may be slow for large loads.
         // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data
         // is available.
-        while (!isBad() && socket && (ws ? ws->messagesAvailable() > 0 : socket->canReadLine())) {
+        while (!isBad() && socket && (ws ? ws->messagesAvailable() > 0 : (isHttp() ? (socket->canReadLine() || socket->bytesAvailable() > 0) : socket->canReadLine()))) {
             // check if paused -- we may get paused inside processJson below
             if (readPaused) {
                 skippedOnReadyRead = true;
