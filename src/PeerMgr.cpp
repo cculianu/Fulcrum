@@ -454,23 +454,23 @@ void PeerMgr::process()
     if (queued.isEmpty())
         return;
     {
-        // Throttle creation of new clients if we have too many windows objects and/or too many active client connections.
-        // Fixes issue #324: https://github.com/cculianu/Fulcrum/issues/324
-        // Note that while the problem originally occurred on windows, it's a good idea to throttle even for linux & mac, just we
-        // accept higher thresholds there.
+        // Throttle creation of new clients if we have too many windows objects and/or too many active client
+        // connections. Fixes issue #324: https://github.com/cculianu/Fulcrum/issues/324.
+        // Note that while the problem originally occurred on windows, it's a good idea to throttle even for
+        // linux & mac, just we accept higher thresholds there.
         constexpr size_t kOCThresh = 5'000,
                          kClientsThresh = isWindows() ? 50 : 200;
         const size_t oc = Util::GetWindowsObjectCount(); // always returns 0 on non-Windows
         if constexpr (isWindows())
             DebugM("PeerMgr::process: winobjct = ", oc ,", clients = ", clients.size(), ", queued = ", queued.size());
-        if (bool oc_over; (oc_over = oc > kOCThresh) || clients.size() > kClientsThresh) {
+        if (bool oc_over; (oc_over = oc > kOCThresh) || size_t(clients.size()) > kClientsThresh) {
             if (oc_over)
-                DebugM("PeerMgr cannot process any more peers, windows object count (", oc, ") exceeds threshold (", kOCThresh,
-                       "), will retry soon ...");
+                DebugM("PeerMgr cannot process any more peers, windows object count (", oc, ") exceeds threshold (",
+                       kOCThresh, "), will retry soon ...");
             else
-                DebugM("PeerMgr cannot process any more peers, clients count (", clients.size(), ") exceeds threshold (", kClientsThresh,
-                       "), will retry soon ...");
-            processSoon(true); // try again in 1 second, force timer restart (otherwise this call gets ignored due to reentrancy)
+                DebugM("PeerMgr cannot process any more peers, clients count (", clients.size(), ") exceeds threshold (",
+                       kClientsThresh, "), will retry soon ...");
+            processSoon(true); // try again in 1 second, force timer restart (otherwise this call just gets ignored)
             return;
         }
     }
