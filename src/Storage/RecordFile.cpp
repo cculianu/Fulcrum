@@ -323,7 +323,7 @@ namespace {
                 throw Exception("Something went wrong generating random hashes.. previous hash and this hash match!");
             lastH = &h;
         }
-        Log() << "Generated " << hashes.size() << " random hahses in " << t0.msecStr() << " msec";
+        Log() << "Generated " << hashes.size() << " random hashes in " << t0.msecStr() << " msec";
         {
             t0 = Tic();
             RecordFile f(fileName, HashLen);
@@ -332,7 +332,7 @@ namespace {
             for (const auto & h : hashes)
                 if (!batch.append(h, &err))
                     throw Exception(QString("Failed to append a record using batch append to RecordFile: %1").arg(err));
-            Log() << "Wrote " << f.numRecords() << " hahses in " << t0.msecStr() << " msec";
+            Log() << "Wrote " << f.numRecords() << " hashes in " << t0.msecStr() << " msec";
         }
         {
             t0 = Tic();
