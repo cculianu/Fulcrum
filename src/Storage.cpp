@@ -1483,7 +1483,7 @@ void Storage::startup()
 
 void Storage::uncleanShutdownDetectedUndoSomeBlocks()
 {
-    constexpr size_t kNumBlocksToUndo = 6u;
+    constexpr size_t kNumBlocksToUndo = 1u;
     if (!kNumBlocksToUndo) return; // we can set the above constant to 0 to disable the undo mechanism altogether
     bool undoMissing = p->earliestUndoHeight == p->InvalidUndoHeight;
     if (!undoMissing) {
