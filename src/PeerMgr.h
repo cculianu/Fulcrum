@@ -124,7 +124,7 @@ private:
 
     void addPeerVerifiedSource(const PeerInfo &, const QHostAddress &resolvedAddress);
 
-    void processSoon();
+    void processSoon(bool restartTimer = false);
     void updateSoon();
     void retryFailedPeers(bool useBadMapInstead = false);
     void refreshGoodPeers();

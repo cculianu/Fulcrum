@@ -695,6 +695,15 @@ namespace Util {
         }
     }
 
+    size_t GetWindowsObjectCount()
+    {
+#if defined(Q_OS_WINDOWS)
+        return GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) + GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
+#else
+        return 0;
+#endif
+    }
+
 } // end namespace Util
 
 Log::Log() {}

@@ -1168,6 +1168,9 @@ namespace Util {
         return s;
     }
 
+    // Returns 0 on non-windows. On windows, returns the object count for the current proccess (GDI + user handles).
+    size_t GetWindowsObjectCount();
+
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.
