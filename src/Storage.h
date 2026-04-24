@@ -50,8 +50,8 @@
 
 // fwd decls used by Storage private(s)
 namespace rocksdb {
-class DB;
 class ColumnFamilyHandle;
+class DB;
 class WriteBatch;
 }
 

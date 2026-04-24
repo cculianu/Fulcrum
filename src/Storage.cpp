@@ -26,6 +26,7 @@
 #include "Rpa.h"
 #include "Span.h"
 #include "Storage.h"
+#include "Storage/Compat.h"
 #include "Storage/ConcatOperator.h"
 #include "Storage/DBRecordArray.h"
 #include "Storage/RecordFile.h"
@@ -1661,10 +1662,8 @@ void Storage::openOrCreateDB(bool bulkLoad)
             }
         }
 
-        rocksdb::DB *db = nullptr;
-        s = rocksdb::DB::Open(opts, path.toStdString(), colFamDescs, &p->db.columnFamilies, &db);
-        p->db.db.reset(db);
-        if (!s.ok() || !db)
+        s = Compat::DBOpen(opts, path.toStdString(), colFamDescs, &p->db.columnFamilies, &p->db.db);
+        if (!s.ok() || !p->db.db)
             throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
                                     .arg(kDBName, StatusString(s), path));
     }
@@ -1913,11 +1912,11 @@ bool Storage::checkFulc1xUpgradeDB()
             if (info.options.merge_operator) dbopts.merge_operator = info.options.merge_operator;
             dbopts.comparator = info.options.comparator; // should always be default BytewiseComparator, but defensively we ensure that is the case
 
-            rocksdb::DB *dbin_raw{};
-            if (auto st = rocksdb::DB::Open(dbopts, fname.toStdString(), &dbin_raw); !st.ok()) {
+            std::unique_ptr<rocksdb::DB> dbin;
+            if (auto st = Compat::DBOpen(dbopts, fname.toStdString(), &dbin); !st.ok()) {
                 throw DatabaseError("rocksdb::DB::Open returned error for " + name + ": " + StatusString(st));
             }
-            std::unique_ptr<rocksdb::DB> dbin(dbin_raw);
+
             const bool isMetaTable = info.handle == p->db.meta;
             std::optional<QByteArray> convertedDbMetaSerialization; // upgraded/converted 'kMeta' row (class: Meta)
 
