@@ -93,8 +93,8 @@ public:
     void cleanup() override;
     // /Mgr
 
-    /// returns a string of the form "6.14.6-ed43161" for the rocksdb version that this application is compiled against
-    /// NB: The version number is from headers (compile-time) but the commit hash comes from the lib itself (runtime).
+    /// Returns a string of the form "6.14.6-ed43161" for the rocksdb version that this application is running against.
+    /// This is a thin wrapper around Storage/Compat.h's `Compat::GetRocksDBVersion()`
     static QString rocksdbVersion();
 
     // locking types
