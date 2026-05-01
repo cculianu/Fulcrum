@@ -20,6 +20,7 @@
 
 #include "ByteView.h"
 #include "ConcatOperator.h"
+#include "Storage/Compat.h"
 #include "Util.h"
 
 #include "bitcoin/serialize.h"
@@ -509,13 +510,13 @@ TEST_CASE(gen_hashes) {
 
 TEST_CASE(open_db) {
     TEST_CHECK(tmpDir.isValid());
-    rocksdb::DB *dbptr{};
     rocksdb::Options opts;
     opts.create_if_missing = true;
     opts.merge_operator.reset(new StorageDetail::ConcatOperator);
-    auto st = rocksdb::DB::Open(opts, tmpDir.path().toStdString(), &dbptr);
+    std::unique_ptr<rocksdb::DB> simple_uptr;
+    auto st = Compat::DBOpen(opts, tmpDir.path().toStdString(), &simple_uptr);
     TEST_CHECK_MESSAGE(st.ok(), st.ToString());
-    db.reset(dbptr);
+    db.reset(simple_uptr.release());
     TEST_CHECK(db != nullptr);
     if (!db) throw Exception("DB pointer is null! Cannot proceed!");
     cf = db->DefaultColumnFamily();

@@ -76,7 +76,7 @@ inline constexpr bool isReleaseBuild() { return true; }
 #  endif
 #endif
 
-#ifdef QT_OS_WIN
+#ifdef Q_OS_WIN
 inline constexpr bool isWindows() { return true; }
 #else
 inline constexpr bool isWindows() { return false; }

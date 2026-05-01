@@ -118,7 +118,7 @@ bool ExtractDestinations(const CScript &scriptPubKey, txnouttype &typeRet,
 
 CScript GetScriptForDestination(const CTxDestination &dest);
 CScript GetScriptForRawPubKey(const CPubKey &pubkey);
-CScript GetScriptForMultisig(int nRequired, const std::vector<CPubKey> &keys);
+CScript GetScriptForMultisig(unsigned nRequired, const std::vector<CPubKey> &keys);
 
 } // end namespace bitcoin
 

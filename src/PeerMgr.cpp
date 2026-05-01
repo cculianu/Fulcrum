@@ -432,9 +432,9 @@ void PeerMgr::refreshGoodPeers()
     }
 }
 
-void PeerMgr::processSoon()
+void PeerMgr::processSoon(const bool restartTimer)
 {
-    callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{process();});
+    callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{process();}, restartTimer);
 }
 
 void PeerMgr::updateSoon()
@@ -453,6 +453,27 @@ void PeerMgr::process()
 {
     if (queued.isEmpty())
         return;
+    {
+        // Throttle creation of new clients if we have too many windows objects and/or too many active client
+        // connections. Fixes issue #324: https://github.com/cculianu/Fulcrum/issues/324.
+        // Note that while the problem originally occurred on windows, it's a good idea to throttle even for
+        // linux & mac, just we accept higher thresholds there.
+        constexpr size_t kOCThresh = 5'000,
+                         kClientsThresh = isWindows() ? 50 : 200;
+        const size_t oc = Util::GetWindowsObjectCount(); // always returns 0 on non-Windows
+        if constexpr (isWindows())
+            DebugM("PeerMgr::process: winobjct = ", oc ,", clients = ", clients.size(), ", queued = ", queued.size());
+        if (bool oc_over; (oc_over = oc > kOCThresh) || size_t(clients.size()) > kClientsThresh) {
+            if (oc_over)
+                DebugM("PeerMgr cannot process any more peers, windows object count (", oc, ") exceeds threshold (",
+                       kOCThresh, "), will retry soon ...");
+            else
+                DebugM("PeerMgr cannot process any more peers, clients count (", clients.size(), ") exceeds threshold (",
+                       kClientsThresh, "), will retry soon ...");
+            processSoon(true); // try again in 1 second, force timer restart (otherwise this call just gets ignored)
+            return;
+        }
+    }
     const PeerInfo pi = queued.take(queued.begin().key());
     if (const bool isTor = pi.isTor(); pi.addr.isNull() && !isTor) {
         if constexpr (debugPrint)
@@ -470,7 +491,7 @@ void PeerMgr::process()
         client->connectToPeer();
     }
     if (!queued.isEmpty())
-        AGAIN();
+        AGAIN(100 /* to avoid excessive connection spam, limit to max 10 new client connections per sec */);
     else
         queued.squeeze();
 }
