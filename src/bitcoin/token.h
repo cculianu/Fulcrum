@@ -1,4 +1,4 @@
-// Copyright (c) 2022 The Bitcoin developers
+// Copyright (c) 2022-2026 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -71,9 +71,10 @@ enum class Capability : uint8_t {
 };
 
 /// The NFT Commitment is a byte blob used to tag NFTs with data.
-static constexpr size_t MAX_CONSENSUS_COMMITMENT_LENGTH = 40;
+static constexpr size_t MAX_CONSENSUS_COMMITMENT_LENGTH_UPGRADE9 = 40;
+static constexpr size_t MAX_CONSENSUS_COMMITMENT_LENGTH_UPGRADE12 = 128;
 
-using NFTCommitmentBase = prevector<MAX_CONSENSUS_COMMITMENT_LENGTH, uint8_t>;
+using NFTCommitmentBase = prevector<MAX_CONSENSUS_COMMITMENT_LENGTH_UPGRADE9, uint8_t>;
 
 /// Implementation is essentially a prevector with 40 bytes preallocated, a custom lex-comparing operator<, and a custom
 /// seriaizer that disallows (un)serialization of empties.
@@ -256,7 +257,7 @@ public:
     /// This is a rough estimate and actual size may be smaller in the average case or larger in some cases.
     static constexpr size_t EstimatedSerialSize() {
         return Id::size() + 1 /* bitfield */ + sizeof(int64_t) /* Amount */
-                + 1 /* CompactSize */ + MAX_CONSENSUS_COMMITMENT_LENGTH;
+                + 1 /* CompactSize */ + MAX_CONSENSUS_COMMITMENT_LENGTH_UPGRADE12;
     }
 
     /* Below three added by Calin */
