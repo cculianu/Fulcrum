@@ -2914,6 +2914,7 @@ TEST_SUITE(token)
             spk.clear();
             token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, false /* doesn't throw */);
             TEST_CHECK(std::equal(wspk.begin(), wspk.end(), spk.begin(), spk.end()));
+            TEST_CHECK(!pdata);
         }
     };
 
