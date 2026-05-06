@@ -53,19 +53,17 @@ void WrapScriptPubKey(WrappedScriptPubKey &wspk, const OutputDataPtr &tokenData,
 
 void UnwrapScriptPubKey(const WrappedScriptPubKey &wspk, OutputDataPtr &tokenDataOut, CScript &scriptPubKeyOut,
                         int nVersion, bool throwIfUnparseableTokenData) {
-    ssize_t token_data_size = 0;
+    WrappedScriptPubKey::size_type token_data_size = 0;
     if (!wspk.empty() && wspk.front() == PREFIX_BYTE) {
         // Token data prefix encountered, so we deserialize the beginning of the CScript bytes as
         // OutputData. The format is: PFX_OUTPUT token_data real_script
         try {
-            GenericVectorReader vr(SER_NETWORK, nVersion, wspk, 0);
-            uint8_t prefix_byte;
-            vr >> prefix_byte; // eat the prefix byte
+            GenericVectorReader vr(SER_NETWORK, nVersion, wspk, 1 /* skip prefix byte */);
             if (!tokenDataOut) tokenDataOut.emplace();
             vr >> *tokenDataOut; // deserialize the token_data
             // tally up the size of the bytes we just deserialized
-            token_data_size = static_cast<ssize_t>(wspk.size()) - static_cast<ssize_t>(vr.size());
-            assert(token_data_size > 0 && token_data_size <= static_cast<ssize_t>(wspk.size())); // sanity check
+            token_data_size = vr.GetPos();
+            assert(token_data_size > 0 && token_data_size <= wspk.size()); // sanity check
         } catch (const std::ios_base::failure &e) {
             if (throwIfUnparseableTokenData) {
                 // for other tests, bubble exception out

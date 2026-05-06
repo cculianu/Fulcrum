@@ -193,7 +193,7 @@ public:
         bitcoin::UnserializeMany(*this, std::forward<Args>(args)...);
     }
 
-    template <typename T> GenericVectorReader &operator>>(T &obj) {
+    template <typename T> GenericVectorReader &operator>>(T &&obj) {
         // Unserialize from this stream
         bitcoin::Unserialize(*this, obj);
         return (*this);

@@ -2910,6 +2910,10 @@ TEST_SUITE(token)
             // JSON "bchn_exception_message" key
             TEST_CHECK_EXCEPTION(token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, true /* throws */),
                                  std::ios_base::failure, ExcMessageContains(expectedExcMsg));
+            // Extra paranoia check, ensure the "non throwing" version just copies wspk -> spk on bad token data
+            spk.clear();
+            token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, false /* doesn't throw */);
+            TEST_CHECK(std::equal(wspk.begin(), wspk.end(), spk.begin(), spk.end()));
         }
     };
 
@@ -2933,7 +2937,7 @@ TEST_SUITE(token)
             }));
             const auto &txout = tx->vout.at(outN);
             TEST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
-                                   txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
+                                  txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
             // ensure re-serialization works
             TEST_CHECK(BTC::Serialize(block, false, false) == blockData);
             // ensure ser-reser is the same with or without cashtokens flag
@@ -2953,12 +2957,12 @@ TEST_SUITE(token)
             token::WrappedScriptPubKey wspk;
             token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION);
             TEST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
-                                   wspk.begin(), wspk.end()));
+                                  wspk.begin(), wspk.end()));
             token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_USE_CASHTOKENS);
             TEST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
-                                   wspk.begin(), wspk.end()));
+                                  wspk.begin(), wspk.end()));
             TEST_CHECK(!std::equal(tokenBlob.begin(), tokenBlob.end(),
-                                    txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
+                                   txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
             // ensure re-serialization works
             TEST_CHECK(BTC::Serialize(block, false, false) == blockData);
             // ensure ser-reser is the same with or without cashtokens flag
