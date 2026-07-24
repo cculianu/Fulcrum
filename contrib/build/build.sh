@@ -19,6 +19,19 @@ if [ -z "$2" ]; then
 fi
 tag="$2"
 
+host_arch=$(uname -m)
+case "$host_arch" in
+    "arm64"|"aarch64")
+        host_arch="arm64"
+        ;;
+    "x86_64"|"amd64")
+        host_arch="amd64"
+        ;;
+    *)
+        fail "Uknown host arch: $host_arch"
+        ;;
+esac
+
 arch_arg=""
 arch_suffix=""
 arch="$3"
@@ -28,22 +41,28 @@ if [ -n "$arch" ]; then
             arch_arg="--platform linux/arm64"
             arch_suffix="_arm64"
             ;;
+        "amd64")
+            arch_arg="--platform linux/amd64"
+            arch_suffix="_amd64"
+            ;;
         *)
-            fail "Unknown arch \"$arch\", specify either nothing or \"arm64\""
+            fail "Unknown arch \"$arch\", specify either nothing or one of: \"arm64\", \"amd64\""
             ;;
     esac
+else
+    arch="${host_arch}"
 fi
 
 suffix=""
 case "$plat" in
     "windows"|"win")
-        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
+        [ "${arch}" = "amd64" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
         plat=win  # normalize to 'win'
         docker_img_name="fulcrum-builder/qt6:windows"
         docker_cont_name="fulcrum_cont_qt6_windows_$$"
         ;;
     "linux"|"lin")
-        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\"; please use \"linux_ub20\" instead"
+        [ "${arch}" = "amd64" ] || fail "Cannot use platform \"$plat\" with \"$arch\"; please use \"linux_ub20\" instead"
         plat=linux
         docker_img_name="fulcrum-builder/qt6:linux"
         docker_cont_name="fulcrum_cont_qt6_linux_$$"
@@ -71,7 +90,7 @@ case "$plat" in
 esac
 
 osxfs_option=""
-if [ `uname` == "Darwin" ]; then
+if [ $(uname) == "Darwin" ]; then
     osxfs_option=":delegated"
 fi
 
