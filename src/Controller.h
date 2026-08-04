@@ -161,7 +161,7 @@ protected slots:
 private:
     friend class CtlTask;
     /// \brief newTask - Create a specific task using this template factory function. The task will be auto-started the
-    ///        next time this thread enters the event loop, via a QTimer::singleShot(0,...).
+    ///        next time this thread enters the event loop, via a Util::AsyncOnObject() call
     ///
     /// \param connectErroredSignal If true, auto-connect signal CtlTask::errored() to this->genericTaskErrored()
     /// \param args The rest of the args get passed to the c'tor of the concrete class specified (in the template arg).

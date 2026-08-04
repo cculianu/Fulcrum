@@ -220,7 +220,7 @@ public:
     virtual ~ProcessAgainMixin() override;
 protected:
     virtual void process() = 0;
-    void AGAIN(int when_ms=0) { QTimer::singleShot(qMax(0, when_ms), qobj(), [this]{process();}); }
+    void AGAIN(int when_ms=0) { Util::AsyncOnObject(qobj(), [this]{ process(); }, when_ms); }
 };
 
 Q_DECLARE_METATYPE(IdMixin::Id);

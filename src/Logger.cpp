@@ -18,6 +18,7 @@
 //
 #include "Common.h"
 #include "Logger.h"
+#include "Util.h"
 
 #include <QCoreApplication>
 #include <QTimer>
@@ -41,7 +42,7 @@ namespace {
     {
         if (level == Logger::Fatal) {
             if (qApp && !QCoreApplication::startingUp())
-                QTimer::singleShot(0, qApp, []{qApp->exit(1);});
+                Util::AsyncOnObject(qApp, []{qApp->exit(1);});
             else
                 std::exit(1);
         }

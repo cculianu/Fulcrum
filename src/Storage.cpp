@@ -2583,7 +2583,7 @@ void Storage::save(SaveSpec typed_spec)
     // atomic variable is not 0).
     if (const auto spec = IntType(typed_spec); ! p->pendingSaves.fetch_or(spec))
     {
-        QTimer::singleShot(0, this, [this]{save_impl();});
+        Util::AsyncOnObject(this, [this]{save_impl();});
     }
 }
 

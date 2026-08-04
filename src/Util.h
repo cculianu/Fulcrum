@@ -651,6 +651,21 @@ namespace Util {
     /// - the string has an even number of characters (or is empty)
     bool IsValidHex(const QByteArray &maybeHexStr);
 
+    /// Convenience for just setting up a QTimer::singleShot and/or QMetaObject::invokeMethod on an object, calling a
+    /// lambda as the timeout.
+    /// By default if when_ms is <= 0, the object will have the lambda invoked in its thread as soon as it
+    /// returns to the event loop.  Always returns immediately.
+    template <std::invocable VoidFuncT>
+    void AsyncOnObject(const QObject *obj_, const VoidFuncT & lambda, int when_ms=0, std::optional<Qt::TimerType> ttype = std::nullopt) {
+        QObject * const obj = const_cast<QObject *>(obj_); // hacky but it is what it is
+        if (when_ms <= 0) // special case for when_ms is <=0, use invoke instead (avoids allocating a timer)
+            QMetaObject::invokeMethod(obj, lambda, Qt::ConnectionType::QueuedConnection);
+        else {
+            if (!ttype) ttype = when_ms <= 2000 ? Qt::TimerType::PreciseTimer : Qt::TimerType::CoarseTimer;
+            QTimer::singleShot(when_ms, *ttype, obj, lambda);
+        }
+    }
+
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
     /// If timeout_ms is not specified or negative, will block forever until lambda returns,
     /// otherwise will block for timeout_ms ms.  Will throw TimeoutException if the timeout
@@ -668,7 +683,7 @@ namespace Util {
         } else {
             auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
             auto future = taskp->get_future();
-            QTimer::singleShot(0, const_cast<QObject *>(obj), [taskp] { (*taskp)(); });
+            Util::AsyncOnObject(obj, [taskp] { (*taskp)(); });
             if (timeout_ms >= 0) {
                 if (auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
                         status != std::future_status::ready) {
@@ -698,14 +713,6 @@ namespace Util {
     /// false otherwise. (Note lambda may still run later asynchronously).
     bool VoidFuncOnObjectNoThrow(const QObject *obj, const VoidFunc & lambda, int timeout_ms=-1);
 
-    /// Convenience for just setting up a QTimer::singleShot on an object, calling a lambda as the timeout.
-    /// By default if when_ms is 0, the object will have the lambda invoked in its thread as soon as it
-    /// returns to the event loop.  Always returns immediately.
-    template <std::invocable VoidFuncT>
-    void AsyncOnObject(const QObject *obj, const VoidFuncT & lambda, unsigned when_ms=0, Qt::TimerType ttype = Qt::TimerType::CoarseTimer) {
-        QTimer::singleShot(int(when_ms), ttype, const_cast<QObject *>(obj), lambda);
-    }
-
     /// This is an alternative to creating signal/slot pairs for calling a method on an object that runs in another
     /// thread.
     ///
@@ -713,7 +720,7 @@ namespace Util {
     /// a private slot _myMethod()).
     ///
     /// To save typing, this template can just allow you to directly call a method on an object in its thread (uses
-    /// QTimer::singleShot).
+    /// QTimer::singleShot and/or QMetaObjecT::invokeMethod).
     ///
     /// Arguments are capture-copied.
     ///

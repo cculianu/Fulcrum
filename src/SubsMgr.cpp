@@ -109,7 +109,7 @@ void SubsMgr::on_started()
     }, Qt::QueuedConnection);
     conns += connect(this, &SubsMgr::requestRemoveZombiesSoon, this, [this](int when_ms) {
         // remove zombies in when_ms, outside normal rate-limiting timer
-        QTimer::singleShot(std::max(when_ms, 0), this, [this]{ removeZombies(true /* forced */); });
+        Util::AsyncOnObject(this, [this]{ removeZombies(true /* forced */); }, when_ms);
     }, Qt::QueuedConnection);
     callOnTimerSoon(kRemoveZombiesTimerIntervalMS, kRemoveZombiesTimerName, [this]{ removeZombies(false); return true;}, true);
 }

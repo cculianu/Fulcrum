@@ -770,7 +770,7 @@ namespace RPC {
         readPaused = b;
         if (!readPaused && hadSkips)
             // we had some skipped on_readyReads() -- resume
-            QTimer::singleShot(0, this, [this]{on_readyRead();} );
+            Util::AsyncOnObject(this, [this]{on_readyRead();} );
         emit readPausedStateChanged(readPaused);
     }
 
@@ -1034,7 +1034,7 @@ namespace RPC {
                 if (auto avail = socket->bytesAvailable(); avail > 0 && (MAX_BUFFER <= 0 || avail <= MAX_BUFFER)) {
                     // callback is on socket as receiver this way if socket dies and is deleted, callback never happens.
                     // *taps forehead*
-                    QTimer::singleShot(0, socket, [this]{on_readyRead();});
+                    Util::AsyncOnObject(socket, [this]{on_readyRead();});
                 }
             }
             if (MAX_BUFFER > 0 && socket->bytesAvailable() > MAX_BUFFER) [[unlikely]] {

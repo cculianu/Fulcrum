@@ -100,7 +100,7 @@ App::App(int argc, char *argv[])
         Log() << "Shutdown requested" << (signalled ? " via signal" : "");
         this->quit();
     }, Qt::QueuedConnection);
-    QTimer::singleShot(0, this, &App::startup); // register to run after app event loop start
+    Util::AsyncOnObject(this, [this]{App::startup();}); // register to run after app event loop start
 }
 
 App::~App()

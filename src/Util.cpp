@@ -780,7 +780,7 @@ Log::~Log()
             }
             // Fatal should signal a quit even here
             if (level == Logger::Level::Fatal && qApp) {
-                QTimer::singleShot(0, qApp, []{ qApp->quit(); });
+                Util::AsyncOnObject(qApp, []{ qApp->quit(); });
             }
         }
     }
