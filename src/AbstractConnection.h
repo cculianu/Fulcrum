@@ -71,6 +71,8 @@ public:
     /// Default implementation returns false.  If the connection is an ElectrumConnection (derived class), it may
     /// return true if it is being handled via the WebSocket::Wrapper class.
     virtual bool isWebSocket() const;
+    /// Default implementation returns false.  If the connection is an HttpClient (derived class), it returns true.
+    virtual bool isHttp() const;
 
 signals:
     void lostConnection(AbstractConnection *);
