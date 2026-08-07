@@ -86,21 +86,4 @@ inline uint64 Hash128to64(const uint128& x) {
   b *= kMul;
   return b;
 }
-
-// Conditionally include declarations for versions of City that require SSE4.2
-// instructions to be available.
-#if defined(__SSE4_2__) && defined(__x86_64__)
-
-// Hash function for a byte array.
-uint128 CityHashCrc128(const char *s, size_t len);
-
-// Hash function for a byte array.  For convenience, a 128-bit seed is also
-// hashed into the result.
-uint128 CityHashCrc128WithSeed(const char *s, size_t len, uint128 seed);
-
-// Hash function for a byte array.  Sets result[0] ... result[3].
-void CityHashCrc256(const char *s, size_t len, uint64 *result);
-
-#endif  // __SSE4_2__
-
 } // namespace CityHash
