@@ -62,6 +62,7 @@ public:
     using size_type = std::size_t;
     using reference = value_type &;
     using pointer = value_type *;
+    using iterator = pointer;
     static constexpr auto npos = ~size_type{};
 
     constexpr ByteView() noexcept = default;
@@ -72,8 +73,8 @@ public:
     constexpr ByteView & operator=(ByteView &&) noexcept = default;
 
     inline constexpr size_type size() const noexcept { return m_size; }
-    inline constexpr pointer begin() const noexcept { return m_data; }
-    inline constexpr pointer end() const noexcept { return m_data + m_size; }
+    inline constexpr iterator begin() const noexcept { return m_data; }
+    inline constexpr iterator end() const noexcept { return m_data + m_size; }
     inline constexpr pointer data() const noexcept { return m_data; }
 
     inline constexpr bool empty() const noexcept { return m_size == 0u; }
