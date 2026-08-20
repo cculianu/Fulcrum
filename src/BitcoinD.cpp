@@ -975,20 +975,46 @@ void BitcoinD::reconnect()
         // remote bitcoind expects https (--bitcoind-tls CLI option); usually this is only for bchd
         QSslSocket *ssl;
         socket = ssl = new QSslSocket(this);
+        const auto & tlsInfo = rpcInfo.tlsInfo;
+        const bool verify = tlsInfo.verify; // --bitcoind-tls-verify
 
         auto conf = ssl->sslConfiguration();
-        conf.setPeerVerifyMode(QSslSocket::PeerVerifyMode::VerifyNone);
+        conf.setPeerVerifyMode(verify ? QSslSocket::PeerVerifyMode::VerifyPeer
+                                      : QSslSocket::PeerVerifyMode::VerifyNone);
         conf.setProtocol(QSsl::SslProtocol::AnyProtocol);
+        if (verify && !tlsInfo.caCerts.isEmpty())
+            // --bitcoind-tls-ca; if it was unspecified we leave the default (system) CA store in place
+            conf.setCaCertificates(tlsInfo.caCerts);
+        if (tlsInfo.hasClientCert()) {
+            // --bitcoind-tls-cert & --bitcoind-tls-key; present a client certificate to the remote bitcoind (mTLS).
+            // Note that setLocalCertificateChain() is equivalent to setLocalCertificate() for a 1-element chain.
+            conf.setLocalCertificateChain(tlsInfo.certChain);
+            conf.setPrivateKey(tlsInfo.key);
+        }
         ssl->setSslConfiguration(conf);
 
         socketConnectSignals();
-        connect(ssl, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), ssl, [ssl](auto errs) {
+        connect(ssl, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), ssl, [ssl, verify](auto errs) {
+            if (verify) {
+                // --bitcoind-tls-verify: log why we are unhappy, then let Qt abort the handshake by *not* calling
+                // ignoreSslErrors(). The reconnect timer in on_started() will try again in 5 seconds.
+                for (const auto & err : errs) {
+                    const auto subject = err.certificate().isNull() ? QString() : err.certificate().subjectDisplayName();
+                    Warning() << "SSL error verifying bitcoind at " << ssl->peerName() << ": " << err.errorString()
+                              << (subject.isEmpty() ? QString() : QString(" (certificate: %1)").arg(subject));
+                }
+                return;
+            }
             for (const auto & err : errs)
                 DebugM("Ignoring SSL error for ", ssl->peerName(), ": ", err.errorString());
             ssl->ignoreSslErrors();
         });
 
-        ssl->connectToHostEncrypted(host, port);
+        if (verify)
+            // --bitcoind-tls-hostname, defaulting to the host name given to --bitcoind
+            ssl->connectToHostEncrypted(host, port, tlsInfo.peerVerifyName.isEmpty() ? host : tlsInfo.peerVerifyName);
+        else
+            ssl->connectToHostEncrypted(host, port);
     } else {
         // regular http bitcoind (default)
         socket = new QTcpSocket(this);
