@@ -665,14 +665,18 @@ public:
     int GetVersion() const { return nVersion; }
 
     void read(char * const pch, const size_t nSize) {
-        if (!file)
-            throw std::ios_base::failure("CAutoFile::read: file handle is nullptr");
-        if (std::fread(pch, 1, nSize, file) != nSize)
+        if (detail_fread({pch, nSize}) != nSize)
             throw std::ios_base::failure(std::feof(file) ? "CAutoFile::read: end of file"
                                                          : "CAutoFile::read: fread failed");
-        if (!xor_key.empty())
-            util::Xor(MakeWritableByteSpan(Span{pch, nSize}), xor_key, xor_offset);
-        xor_offset += nSize; // maintain accurate xor_offset
+    }
+
+    size_t detail_fread(std::span<char> dst) {
+        if (!file) throw std::ios_base::failure("CAutoFile::detail_fread: file handle is nullptr");
+        const size_t ret = std::fread(dst.data(), 1, dst.size(), file);
+        if (!xor_key.empty() && ret)
+            util::Xor(MakeWritableByteSpan(Span(dst.data(), ret)), xor_key, xor_offset);
+        xor_offset += ret; // maintain accurate xor_offset
+        return ret;
     }
 
     void ignore(size_t nSize) {
@@ -714,6 +718,18 @@ public:
         }
     }
 
+    void write_buffer(std::span<char> src) {
+        if (!file) throw std::ios_base::failure("CAutoFile::write_buffer: file handle is nullptr");
+        if (!xor_key.empty()) {
+            // obfuscate in-place
+            util::Xor(MakeWritableByteSpan(Span{src}), xor_key, xor_offset);
+        }
+        xor_offset += src.size(); // maintain accurate xor_offset just in case xor_key is later enabled
+        if (std::fwrite(src.data(), 1, src.size(), file) != src.size()) {
+            throw std::ios_base::failure("CAutoFile::write_buffer: write failed");
+        }
+    }
+
     template <typename T> CAutoFile &operator<<(const T &obj) {
         // Serialize to this stream
         if (!file)
@@ -727,6 +743,107 @@ public:
         if (!file)
             throw std::ios_base::failure("CAutoFile::operator>>: file handle is nullptr");
         bitcoin::Unserialize(*this, obj);
+        return *this;
+    }
+};
+
+
+/**
+ * Wrapper that buffers reads from an underlying stream.
+ * Requires that the underlying stream supports detail_fread() calls
+ * for variable-sized reads.
+ */
+template <typename S>
+    requires requires (S s, std::vector<char> vch) { {s.detail_fread(vch)} -> std::convertible_to<size_t>; }
+class BufferedReader
+{
+    S& m_src;
+    using DataBuffer = std::vector<char>;
+    DataBuffer m_buf;
+    size_t m_buf_pos;
+
+public:
+    //! Requires stream ownership to prevent leaving the stream at an unexpected position after buffered reads.
+    explicit BufferedReader(S& stream, size_t size = 1 << 16 /* 64K */)
+    requires std::is_rvalue_reference_v<S&&>
+        : m_src{stream}, m_buf(size), m_buf_pos{size} {}
+
+    int GetType() const { return m_src.GetType(); }
+    int GetVersion() const { return m_src.GetVersion(); }
+
+    void read(char *vch, size_t sz) {
+        while (sz) {
+            if (const auto available = std::min(sz, m_buf.size() - m_buf_pos)) {
+                std::memcpy(vch, m_buf.data() + m_buf_pos, available);
+                m_buf_pos += available;
+                vch += available;
+                sz -= available;
+            }
+            if (sz) {
+                assert(m_buf_pos == m_buf.size());
+                m_buf_pos = 0;
+                m_buf.resize(m_src.detail_fread(m_buf));
+                if (m_buf.empty()) throw std::ios_base::failure("BufferedFile::read: end of stream");
+            }
+        }
+    }
+
+    void read(std::span<std::byte> dst) { read(reinterpret_cast<char *>(dst.data()), dst.size()); }
+
+    template <typename T>
+    BufferedReader& operator>>(T&& obj) {
+        bitcoin::Unserialize(*this, obj);
+        return *this;
+    }
+};
+
+/**
+ * Wrapper that buffers writes to an underlying stream.
+ * Requires underlying stream to support write_buffer() method
+ * for efficient buffer flushing and obfuscation.
+ */
+template <typename S>
+    requires requires (S s, std::span<char> vch) { s.write_buffer(vch); }
+class BufferedWriter
+{
+    S& m_dst;
+    using DataBuffer = std::vector<char>;
+    DataBuffer m_buf;
+    size_t m_buf_pos{0};
+
+public:
+    explicit BufferedWriter(S& stream, size_t size = 1 << 16 /* 64K */) : m_dst{stream}, m_buf(size) {}
+
+    ~BufferedWriter() { flush(); }
+
+    int GetType() const { return m_dst.GetType(); }
+    int GetVersion() const { return m_dst.GetVersion(); }
+
+    void flush() {
+        if (m_buf_pos) m_dst.write_buffer(std::span{m_buf}.first(m_buf_pos));
+        m_buf_pos = 0;
+    }
+
+    void fclose() requires requires(S s) { s.fclose(); } {
+        flush();
+        m_dst.fclose();
+    }
+
+    void write(const char *vch, size_t sz) {
+        std::span<const char> src{vch, sz};
+        while (const auto available = std::min(src.size(), m_buf.size() - m_buf_pos)) {
+            std::memcpy(m_buf.data() + m_buf_pos, src.data(), available);
+            m_buf_pos += available;
+            if (m_buf_pos == m_buf.size()) flush();
+            src = src.subspan(available);
+        }
+    }
+
+    void write(std::span<const std::byte> src) { write(reinterpret_cast<const char *>(src.data()), src.size()); }
+
+    template <typename T>
+    BufferedWriter& operator<<(const T& obj) {
+        bitcoin::Serialize(*this, obj);
         return *this;
     }
 };

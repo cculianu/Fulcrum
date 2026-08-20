@@ -118,6 +118,11 @@ public:
     /// Returns the extended version string suitable for display for the --version CLI arg
     static QString extendedVersionString(bool justLibs=false);
 
+    /// Register a functor to run at app exit from within App::cleanup(). Functors execute in the reverse order
+    /// of their registration. This call is thread-safe and only returns after the functor has been registered.
+    /// Note: The functor will execute in the thread context of this App object (main thread) from within App::cleanup.
+    void registerCleanupHandler(Util::VoidFunc && func);
+
 signals:
     // other code emits the below two to tell the app (main) thread to call the corresponding protected slot to set
     // the corresponding values in the shared Options object.
@@ -210,6 +215,9 @@ private:
         ~LatchFile(); ///< Deletes `datadir/latch` if it exists and if suppressFileDeletion is false.
     };
     std::optional<LatchFile> latchFile; // emplace'd explicitly in startup(), and reset in cleanup()
+    /// The cleanup handlers to run right at app exit. These are executed in reverse order from how they appear
+    /// in the vector, inside private method cleanup()
+    std::vector<Util::VoidFunc> cleanupHandlers;
 };
 
 inline App *app() { return App::globalInstance(); }

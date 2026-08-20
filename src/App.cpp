@@ -297,6 +297,13 @@ void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
     quitting = true;
+    std::for_each(cleanupHandlers.rbegin(), cleanupHandlers.rend(), [](auto &f){
+        if (f) {
+            f();
+            f = {}; // destroy contained function to do immediate cleanup of any captures it may hold
+        }
+    });
+    cleanupHandlers.clear();
     cleanup_WaitForThreadPoolWorkers();
     if (!httpServers.isEmpty()) {
         Log("Stopping Stats HTTP Servers ...");
@@ -306,6 +313,10 @@ void App::cleanup()
     if (controller) { Log("Stopping Controller ... "); controller->cleanup(); controller.reset(); }
     latchFile.reset(); // delete the latch file (explicitly destructed here to capture any log messages)
     cleanup_Sighandlers();
+}
+
+void App::registerCleanupHandler(Util::VoidFunc && f) {
+    Util::LambdaOnObject<void>(this, [this, &f]{ cleanupHandlers.emplace_back(std::move(f)); });
 }
 
 void App::cleanup_Sighandlers()

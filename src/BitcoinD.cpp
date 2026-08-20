@@ -392,6 +392,8 @@ void BitcoinDMgr::refreshBitcoinDGenesisHash()
             } else {
                 DebugM("Refreshed genesis hash from bitcoind: ", newHash.toHex());
             }
+            if (changed || (ok && oldHash.isEmpty()))
+                emit gotNewGenesisHash(newHash);
         },
         // error
         [](const RPC::Message &msg){

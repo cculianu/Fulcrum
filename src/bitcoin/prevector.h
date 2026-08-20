@@ -41,7 +41,7 @@ class prevector {
     static_assert (std::is_standard_layout_v<T> && std::is_trivially_destructible_v<T> && std::is_trivial_v<T>
                    && sizeof(Size) == sizeof(Diff) && std::is_integral_v<Size>
                    && std::is_integral_v<Diff> && std::is_unsigned_v<Size> && std::is_signed_v<Diff>
-                   && sizeof(Size) >= 4);
+                   && size_t(std::numeric_limits<Size>::max()) > N);
     using byte = std::byte;
 public:
     using size_type = Size;
@@ -254,6 +254,7 @@ public:
     }
 
     static constexpr size_t static_capacity() { return N; }
+    static constexpr size_t max_size() { return std::numeric_limits<size_type>::max() - N; }
 
     T &operator[](size_type pos) noexcept { return *item_ptr(pos); }
 

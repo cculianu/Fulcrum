@@ -62,6 +62,8 @@ namespace BTC {
         static Address fromPubKey(const QByteArray &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(reinterpret_cast<const Byte *>(pubKey.constData()), reinterpret_cast<const Byte *>(pubKey.constData() + pubKey.length()), kind, net); }
         static Address fromPubKey(const std::vector<Byte> &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(&*pubKey.begin(), &*pubKey.end(), kind, net); }
 
+        static Address fromP2SHScriptHash(const ByteView &sh, Net net = MainNet);
+
         const QByteArray & hash() const noexcept { return _hash; }
 
         Kind kind() const noexcept { return _kind; }

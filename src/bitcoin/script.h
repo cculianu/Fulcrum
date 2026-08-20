@@ -840,15 +840,25 @@ public:
 
     bool IsPayToScriptHash() const;
     bool IsCommitment(const std::vector<uint8_t> &data) const;
-    bool IsWitnessProgram(int &version, std::vector<uint8_t> &program) const;
-    bool IsWitnessProgram() const;
+
+    // A witness program is any valid CScript that consists of a 1-byte push opcode
+    // followed by a data push between 2 and 40 bytes.
+    static bool IsWitnessProgram(const std::span<const uint8_t> &blob, int *pversion = nullptr,
+                                 std::vector<uint8_t> *pprogram = nullptr);
+    bool IsWitnessProgram(int *pversion = nullptr, std::vector<uint8_t> *pprogram = nullptr) const {
+        return IsWitnessProgram(*this, pversion, pprogram);
+    }
+    bool IsWitnessProgram(int &version, std::vector<uint8_t> &program) const {
+        return IsWitnessProgram(&version, &program);
+    }
 
     /**
      * Called by IsStandardTx and P2SH/BIP62 VerifyScript (which makes it
      * consensus-critical).
      */
-    bool IsPushOnly(const_iterator pc) const;
-    bool IsPushOnly() const;
+    bool IsPushOnly(const_iterator pc, std::vector<uint8_t> *lastPush = nullptr, bool disallowOpReserved = false,
+                    size_t *pnPushes = nullptr) const;
+    bool IsPushOnly(std::vector<uint8_t> *lastPush = nullptr, bool disallowOpReserved = false, size_t *pnPushes = nullptr) const;
 
     /**
      * Returns whether the script is guaranteed to fail at execution, regardless

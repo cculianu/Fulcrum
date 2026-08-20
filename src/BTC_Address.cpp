@@ -204,6 +204,18 @@ namespace BTC
         return ret;
     }
 
+    /* static */
+    Address Address::fromP2SHScriptHash(const ByteView &sh, Net net)
+    {
+        Address ret;
+        ret._kind = Kind::P2SH;
+        ret._hash = sh.toByteArray(true);
+        ret._net = net;
+        ret.verByte = verByteForNetAndKind(ret._net, ret._kind);
+        return ret;
+    }
+
+
     // Used internally in one branch when parsing Legacy.  If it fails it will clear the address to default constructed values.
     bool Address::autosetKind()
     {
@@ -771,6 +783,14 @@ namespace BTC
                                  || a2.hash() != addr.hash() || a2.kind() != addr.kind()))  {
                 Error() << "Failed to encode as legacy then decode as the same address again: " << a2.toLegacyString();
                 return false;
+            }
+            if (addr.kind() == Address::Kind::P2SH) {
+                // test the fromP2SHScriptHash method
+                const auto addr2 = Address::fromP2SHScriptHash(addr.hash(), addr.net());
+                if (addr2 != addr || addr.toString() != addr2.toString()) {
+                    Error() << "addr != addr2: " << addr.toString() << " != " << addr2.toString();
+                    return false;
+                }
             }
         }
         Print() << vectors.size() << " test vectors passed";

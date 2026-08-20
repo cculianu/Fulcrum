@@ -163,6 +163,12 @@ signals:
     /// servicing a getblock request.  So during block download, we never disconnect if "stale".
     void inBlockDownload(bool b);
 
+    /// Emitted on (re)connect to bitcoind; when we get a NEW genesis hash from the daemon (via RPC: getblockhash 0)
+    /// Note that this normally is emitted only once, even if we lose connection to bitcoind and get it again. The only
+    /// time it will be emitted a second time is if the genesis hash has CHANGED (which likely represents a
+    /// configuration error on the remote daemon)
+    void gotNewGenesisHash(BlockHash);
+
 protected:
     Stats stats() const override; // from Mgr
 

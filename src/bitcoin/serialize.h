@@ -22,6 +22,8 @@
 #include <span>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -169,6 +171,7 @@ enum {
     SER_NETWORK = (1 << 0),
     SER_DISK = (1 << 1),
     SER_GETHASH = (1 << 2),
+    SER_CALIN_CUSTOM_NO_RANGE_CHECKS = (1 << 3),
 };
 
 //! Convert the reference base type to X, without changing constness or
@@ -181,7 +184,7 @@ template <typename X> const X &ReadWriteAsHelper(const X &x) {
 }
 
 #define READWRITE(...) (bitcoin::SerReadWriteMany(s, ser_action, __VA_ARGS__))
-#define READWRITEAS(type, obj) (bitcoin::SerReadWriteMany(s, ser_action, ReadWriteAsHelper<type>(obj)))
+#define READWRITEAS(type, obj) (bitcoin::SerReadWriteMany(s, ser_action, bitcoin::ReadWriteAsHelper<type>(obj)))
 #define SER_READ(obj, code) do { if constexpr (ser_action.ForRead()) { code; } } while (0)
 #define SER_WRITE(obj, code) do { if constexpr (!ser_action.ForRead()) { code; } } while (0)
 
@@ -463,8 +466,9 @@ template <typename Stream> uint64_t ReadCompactSizeWithLimit(Stream &is, const u
  * check is performed. When used as a generic number encoding, range_check should be set to false.
  */
 template <typename Stream>
-uint64_t ReadCompactSize(Stream &is, bool range_check = true) {
-    return ReadCompactSizeWithLimit(is, range_check ? MAX_SIZE : std::numeric_limits<uint64_t>::max());
+uint64_t ReadCompactSize(Stream &is, bool range_check = true, uint64_t MAXSZ = MAX_SIZE) {
+    if (is.GetType() & SER_CALIN_CUSTOM_NO_RANGE_CHECKS) range_check = false; /* Always disable if this is set! */
+    return ReadCompactSizeWithLimit(is, range_check ? MAXSZ : std::numeric_limits<uint64_t>::max());
 }
 
 /**
@@ -762,10 +766,10 @@ void Unserialize(Stream &is, std::basic_string<C> &str);
 /**
  * prevector
  */
-template <typename Stream, unsigned int N, typename T>
-inline void Serialize(Stream &os, const prevector<N, T> &v);
-template <typename Stream, unsigned int N, typename T>
-inline void Unserialize(Stream &is, prevector<N, T> &v);
+template <typename Stream, unsigned int N, typename T, typename Size, typename Diff>
+inline void Serialize(Stream &os, const prevector<N, T, Size, Diff> &v);
+template <typename Stream, unsigned int N, typename T, typename Size, typename Diff>
+inline void Unserialize(Stream &is, prevector<N, T, Size, Diff> &v);
 
 /**
  * vector
@@ -792,12 +796,28 @@ template <typename Stream, typename K, typename T, typename Pred, typename A>
 void Unserialize(Stream &is, std::map<K, T, Pred, A> &m);
 
 /**
+ * unordered_map
+ */
+template <typename Stream, typename K, typename T, typename H, typename E, typename A>
+void Serialize(Stream &os, const std::unordered_map<K, T, H, E, A> &m);
+template <typename Stream, typename K, typename T, typename H, typename E, typename A>
+void Unserialize(Stream &is, std::unordered_map<K, T, H, E, A> &m);
+
+/**
  * set
  */
 template <typename Stream, typename K, typename Pred, typename A>
 void Serialize(Stream &os, const std::set<K, Pred, A> &m);
 template <typename Stream, typename K, typename Pred, typename A>
 void Unserialize(Stream &is, std::set<K, Pred, A> &m);
+
+/**
+ * unordered_set
+ */
+template <typename Stream, typename K, typename H, typename E, typename A>
+void Serialize(Stream &os, const std::unordered_set<K, H, E, A> &s);
+template <typename Stream, typename K, typename H, typename E, typename A>
+void Unserialize(Stream &is, std::unordered_set<K, H, E, A> &s);
 
 /**
  * shared_ptr
@@ -942,13 +962,13 @@ inline void Unserialize_vector(Stream &is, Vector &v) {
 /**
  * prevector
  */
-template <typename Stream, unsigned int N, typename T>
-inline void Serialize(Stream &os, const prevector<N, T> &v) {
+template <typename Stream, unsigned int N, typename T, typename Size, typename Diff>
+inline void Serialize(Stream &os, const prevector<N, T, Size, Diff> &v) {
     ser_detail::Serialize_vector(os, v);
 }
 
-template <typename Stream, unsigned int N, typename T>
-inline void Unserialize(Stream &is, prevector<N, T> &v) {
+template <typename Stream, unsigned int N, typename T, typename Size, typename Diff>
+inline void Unserialize(Stream &is, prevector<N, T, Size, Diff> &v) {
     ser_detail::Unserialize_vector(is, v);
 }
 
@@ -996,10 +1016,33 @@ void Unserialize(Stream &is, std::map<K, T, Pred, A> &m) {
     m.clear();
     size_t nSize = ReadCompactSize(is);
     typename std::map<K, T, Pred, A>::iterator mi = m.begin();
-    for (size_t i = 0; i < nSize; i++) {
+    for (size_t i = 0; i < nSize; ++i) {
         std::pair<K, T> item;
         Unserialize(is, item);
-        mi = m.insert(mi, item);
+        mi = m.insert(mi, std::move(item));
+    }
+}
+
+/**
+ * unordered_map
+ */
+template <typename Stream, typename K, typename T, typename H, typename E, typename A>
+void Serialize(Stream &os, const std::unordered_map<K, T, H, E, A> &m) {
+    WriteCompactSize(os, m.size());
+    for (const auto &entry : m) {
+        Serialize(os, entry);
+    }
+}
+
+template <typename Stream, typename K, typename T, typename H, typename E, typename A>
+void Unserialize(Stream &is, std::unordered_map<K, T, H, E, A> &m) {
+    m.clear();
+    size_t nSize = ReadCompactSize(is);
+    m.reserve(nSize);
+    for (size_t i = 0; i < nSize; ++i) {
+        std::pair<K, T> item;
+        Unserialize(is, item);
+        m.insert(std::move(item));
     }
 }
 
@@ -1019,10 +1062,33 @@ void Unserialize(Stream &is, std::set<K, Pred, A> &m) {
     m.clear();
     size_t nSize = ReadCompactSize(is);
     typename std::set<K, Pred, A>::iterator it = m.begin();
-    for (size_t i = 0; i < nSize; i++) {
+    for (size_t i = 0; i < nSize; ++i) {
         K key;
         Unserialize(is, key);
-        it = m.insert(it, key);
+        it = m.insert(it, std::move(key));
+    }
+}
+
+/**
+ * unordered_set
+ */
+template <typename Stream, typename K, typename H, typename E, typename A>
+void Serialize(Stream &os, const std::unordered_set<K, H, E, A> &m) {
+    WriteCompactSize(os, m.size());
+    for (const K &i : m) {
+        Serialize(os, i);
+    }
+}
+
+template <typename Stream, typename K, typename H, typename E, typename A>
+void Unserialize(Stream &is, std::unordered_set<K, H, E, A> &m) {
+    m.clear();
+    size_t nSize = ReadCompactSize(is);
+    m.reserve(nSize);
+    for (size_t i = 0; i < nSize; ++i) {
+        K key;
+        Unserialize(is, key);
+        m.insert(std::move(key));
     }
 }
 

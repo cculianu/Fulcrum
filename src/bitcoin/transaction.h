@@ -125,8 +125,13 @@ public:
 
     explicit CTxIn(const COutPoint &prevoutIn, const CScript &scriptSigIn = {}, uint32_t nSequenceIn = SEQUENCE_FINAL)
         : prevout{prevoutIn}, scriptSig{scriptSigIn}, nSequence{nSequenceIn} {}
+    explicit CTxIn(const COutPoint &prevoutIn, CScript &&scriptSigIn = {}, uint32_t nSequenceIn = SEQUENCE_FINAL) noexcept
+        : prevout{prevoutIn}, scriptSig{std::move(scriptSigIn)}, nSequence{nSequenceIn} {}
+
     CTxIn(const TxId &prevTxId, uint32_t nOut, const CScript &scriptSigIn = {}, uint32_t nSequenceIn = SEQUENCE_FINAL)
         : prevout(prevTxId, nOut), scriptSig{scriptSigIn}, nSequence{nSequenceIn} {}
+    CTxIn(const TxId &prevTxId, uint32_t nOut, CScript &&scriptSigIn = {}, uint32_t nSequenceIn = SEQUENCE_FINAL) noexcept
+        : prevout(prevTxId, nOut), scriptSig{std::move(scriptSigIn)}, nSequence{nSequenceIn} {}
 
     SERIALIZE_METHODS(CTxIn, obj) { READWRITE(obj.prevout, obj.scriptSig, obj.nSequence); }
 
@@ -150,8 +155,10 @@ public:
     CTxOut(Amount nValueIn, const CScript &scriptPubKeyIn, const token::OutputDataPtr &tokenDataIn = {})
         : nValue(nValueIn), scriptPubKey(scriptPubKeyIn), tokenDataPtr(tokenDataIn) {}
 
-    CTxOut(Amount nValueIn, const CScript &scriptPubKeyIn, token::OutputDataPtr &&tokenDataIn)
+    CTxOut(Amount nValueIn, const CScript &scriptPubKeyIn, token::OutputDataPtr &&tokenDataIn = {})
         : nValue(nValueIn), scriptPubKey(scriptPubKeyIn), tokenDataPtr(std::move(tokenDataIn)) {}
+    CTxOut(Amount nValueIn, CScript &&scriptPubKeyIn, token::OutputDataPtr &&tokenDataIn = {})
+        : nValue(nValueIn), scriptPubKey(std::move(scriptPubKeyIn)), tokenDataPtr(std::move(tokenDataIn)) {}
 
     SERIALIZE_METHODS(CTxOut, obj) {
         READWRITE(obj.nValue);

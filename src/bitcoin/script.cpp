@@ -497,49 +497,48 @@ bool CScript::IsCommitment(const std::vector<uint8_t> &data) const {
 
 // A witness program is any valid CScript that consists of a 1-byte push opcode
 // followed by a data push between 2 and 40 bytes.
-bool CScript::IsWitnessProgram(int &version,
-                               std::vector<uint8_t> &program) const {
-    if (this->size() < 4 || this->size() > 42) {
+/* static */
+bool CScript::IsWitnessProgram(const std::span<const uint8_t> &blob, int *pversion, std::vector<uint8_t> *pprogram ) {
+    if (blob.size() < 4 || blob.size() > 42) {
         return false;
     }
-    if ((*this)[0] != OP_0 && ((*this)[0] < OP_1 || (*this)[0] > OP_16)) {
+    if (blob[0] != OP_0 && (blob[0] < OP_1 || blob[0] > OP_16)) {
         return false;
     }
-    if (size_t((*this)[1] + 2) == this->size()) {
-        version = DecodeOP_N((opcodetype)(*this)[0]);
-        program = std::vector<uint8_t>(this->begin() + 2, this->end());
+    if (size_t(blob[1] + 2) == blob.size()) {
+        if (pversion) *pversion = DecodeOP_N((opcodetype)blob[0]);
+        if (pprogram) pprogram->assign(blob.begin() + 2, blob.end());
         return true;
     }
     return false;
 }
 
-// Wrapper returning only the predicate
-bool CScript::IsWitnessProgram() const {
-    int version;
-    std::vector<uint8_t> program;
-    return IsWitnessProgram(version, program);
-}
-
-bool CScript::IsPushOnly(const_iterator pc) const {
+bool CScript::IsPushOnly(const_iterator pc, std::vector<uint8_t> * const lastPush, const bool disallowOpReserved,
+                         size_t * const pnPushes) const {
+    size_t nPushes = 0;
     while (pc < end()) {
         opcodetype opcode;
-        if (!GetOp(pc, opcode)) {
+        if (!GetOp2(pc, opcode, lastPush)) {
+            if (pnPushes) *pnPushes = nPushes;
             return false;
         }
 
         // Note that IsPushOnly() *does* consider OP_RESERVED to be a push-type
-        // opcode, however execution of OP_RESERVED fails, so it's not relevant
+        // opcode (unless disallowOpReserved == true), however execution of OP_RESERVED fails, so it's not relevant
         // to P2SH/BIP62 as the scriptSig would fail prior to the P2SH special
         // validation code being executed.
-        if (opcode > OP_16) {
+        if (opcode > OP_16 || (disallowOpReserved && opcode == OP_RESERVED)) {
+            if (pnPushes) *pnPushes = nPushes;
             return false;
         }
+        ++nPushes;
     }
+    if (pnPushes) *pnPushes = nPushes;
     return true;
 }
 
-bool CScript::IsPushOnly() const {
-    return this->IsPushOnly(begin());
+bool CScript::IsPushOnly(std::vector<uint8_t> *lastPush, bool disallowOpReserved, size_t *pnPushes) const {
+    return this->IsPushOnly(begin(), lastPush, disallowOpReserved, pnPushes);
 }
 
 } // end namespace bitcoin
