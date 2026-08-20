@@ -119,6 +119,14 @@ QVariantMap Options::toMap() const
     }
     m["bitcoind"] = QString("%1:%2").arg(bdRPCInfo.hostPort.first, QString::number(bdRPCInfo.hostPort.second));
     m["bitcoind-tls"] = bdRPCInfo.tls;
+    if (bdRPCInfo.tls) {
+        const auto & tlsInfo = bdRPCInfo.tlsInfo;
+        m["bitcoind-tls-verify"] = tlsInfo.verify;
+        m["bitcoind-tls-ca"] = tlsInfo.caFile;
+        m["bitcoind-tls-hostname"] = tlsInfo.peerVerifyName;
+        m["bitcoind-tls-cert"] = tlsInfo.certFile;
+        m["bitcoind-tls-key"] = tlsInfo.keyFile;
+    }
     m["hasIPv6 listener"] = hasIPv6Listener;
     if (const auto cf = bdRPCInfo.getCookieFile(); !cf.isEmpty()) {
         m["rpccookie"] = QVariant(cf);

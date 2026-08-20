@@ -478,6 +478,37 @@ void App::parseArgs()
                " HTTPS. If you are using " APPNAME " with bchd, you either need to start bchd with the `notls`"
                " option, or you need to specify this option to " APPNAME ".\n"),
     },
+    { "bitcoind-tls-verify",
+       QString("If specified, verify the certificate presented by the remote bitcoind. Requires --bitcoind-tls."
+               " Without this option, --bitcoind-tls merely encrypts the connection to bitcoind; it does not"
+               " authenticate the remote end at all. The certificate is checked against the CA certificate(s) given by"
+               " --bitcoind-tls-ca, or against the system CA store if that option is absent.\n"),
+    },
+    { "bitcoind-tls-ca",
+       QString("Specify a PEM file containing the CA certificate(s) to trust when verifying the certificate presented"
+               " by the remote bitcoind. Requires --bitcoind-tls-verify. If this option is absent, the system CA store"
+               " is used.\n"),
+       QString("crtfile"),
+    },
+    { "bitcoind-tls-hostname",
+       QString("Specify the host name that must appear (as the common name or as a subject alternative name) in the"
+               " certificate presented by the remote bitcoind. Requires --bitcoind-tls-verify. If this option is"
+               " absent, the host name given to -b/--bitcoind is used.\n"),
+       QString("hostname"),
+    },
+    { "bitcoind-tls-cert",
+       QString("Specify a PEM file containing the client certificate to present to the remote bitcoind, for setups"
+               " where the remote end requires client certificate authentication (\"mTLS\"). The file may contain"
+               " either a single certificate or a leaf-first certificate chain. Requires --bitcoind-tls. If this option"
+               " is specified, --bitcoind-tls-key must also be specified.\n"),
+       QString("crtfile"),
+    },
+    { "bitcoind-tls-key",
+       QString("Specify a PEM file containing the unencrypted private key that goes with the certificate specified in"
+               " --bitcoind-tls-cert. Passphrase-protected keys are not supported. If this option is specified,"
+               " --bitcoind-tls-cert must also be specified.\n"),
+       QString("keyfile"),
+    },
     { { "u", "rpcuser" },
        QString("Specify a username to use for authenticating to bitcoind."
        " This option should be the same username you specified in your bitcoind.conf file"
@@ -895,6 +926,51 @@ void App::parseArgs()
         // check that Qt actually supports SSL since we now know that we require it to proceed
         checkSupportsSsl();
         Util::AsyncOnObject(this, []{ Debug() << "config: bitcoind_tls = true"; });
+    }
+    // --bitcoind-tls-verify, --bitcoind-tls-ca, --bitcoind-tls-hostname, --bitcoind-tls-cert, --bitcoind-tls-key
+    {
+        auto & tlsInfo = options->bdRPCInfo.tlsInfo;
+        // helper: reads a "bitcoind-tls-xxx" CLI arg or the equivalent "bitcoind_tls_xxx" (or "bitcoind-tls-xxx") conf
+        // file variable, with the CLI arg taking precedence, as elsewhere in this function.
+        const auto tlsValue = [&conf, &parser](const QString &suffix) {
+            const QString cliName = QString("bitcoind-tls-") + suffix;
+            return conf.value(QString("bitcoind_tls_") + suffix, conf.value(cliName, parser.value(cliName)));
+        };
+        const bool verify = parser.isSet("bitcoind-tls-verify")
+                            || conf.boolValue("bitcoind_tls_verify", conf.boolValue("bitcoind-tls-verify"));
+        const QString caFile = tlsValue("ca"), hostName = tlsValue("hostname"),
+                      certFile = tlsValue("cert"), keyFile = tlsValue("key");
+
+        if (const bool anySet = verify || !caFile.isEmpty() || !hostName.isEmpty() || !certFile.isEmpty()
+                                || !keyFile.isEmpty();
+                anySet && !options->bdRPCInfo.tls)
+            throw BadArgs("The bitcoind_tls_* options require that bitcoind_tls also be specified");
+        if (certFile.isEmpty() != keyFile.isEmpty())
+            throw BadArgs("`bitcoind_tls_cert` and `bitcoind_tls_key` must both be specified");
+        if (!verify && !caFile.isEmpty())
+            throw BadArgs("`bitcoind_tls_ca` requires that `bitcoind_tls_verify` also be specified");
+        if (!verify && !hostName.isEmpty())
+            throw BadArgs("`bitcoind_tls_hostname` requires that `bitcoind_tls_verify` also be specified");
+
+        tlsInfo.verify = verify;
+        tlsInfo.peerVerifyName = hostName;
+        options->bdRPCInfo.setTlsFiles(certFile, keyFile, caFile); // may throw BadArgs
+
+        if (options->bdRPCInfo.tls)
+            Util::AsyncOnObject(this, [tlsInfo] {
+                Debug() << "config: bitcoind_tls_verify = " << (tlsInfo.verify ? "true" : "false");
+                if (tlsInfo.verify) {
+                    Debug() << "config: bitcoind_tls_ca = "
+                            << (tlsInfo.caFile.isEmpty()
+                                ? QString("(system CA store)")
+                                : QString("%1 (%2 certificate(s))").arg(tlsInfo.caFile).arg(tlsInfo.caCerts.size()));
+                    if (!tlsInfo.peerVerifyName.isEmpty())
+                        Debug() << "config: bitcoind_tls_hostname = " << tlsInfo.peerVerifyName;
+                }
+                if (tlsInfo.hasClientCert())
+                    Debug() << "config: bitcoind_tls_cert = " << tlsInfo.certFile << " ("
+                            << tlsInfo.certChain.size() << " certificate(s)), bitcoind_tls_key = " << tlsInfo.keyFile;
+            });
     }
     if (specifiedRpcCookie) {
         options->bdRPCInfo.setCookieFile(conf.value("rpccookie", parser.value("K")));

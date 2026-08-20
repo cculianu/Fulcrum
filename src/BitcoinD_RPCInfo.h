@@ -18,7 +18,10 @@
 //
 #pragma once
 
+#include <QList>
 #include <QPair>
+#include <QSslCertificate>
+#include <QSslKey>
 #include <QString>
 
 /// Encapsulates all the info one needs to connect to the remote bitcoind RPC
@@ -35,6 +38,37 @@ public:
     QPair<QString, quint16> hostPort;
     /// CLI: --bitcoind-tls. If true, we will connect to the remote bitcoind via SSL/TLS. See BitcoinD.cpp.
     bool tls = false;
+
+    /// Optional authentication settings for the TLS connection to the remote bitcoind (aka "mTLS"). These are only
+    /// ever consulted if `tls` above is true.  Note that `tls` by itself only encrypts the connection; it does not
+    /// authenticate either end of it.  The settings below add that authentication.
+    struct TlsInfo {
+        /// CLI: --bitcoind-tls-verify.  If true, verify the certificate presented by the remote bitcoind.  The default
+        /// (false) preserves the historical behavior of accepting any certificate whatsoever.
+        bool verify = false;
+        /// CLI: --bitcoind-tls-ca.  The CA certificate(s) to trust when `verify` is true.  If empty, the system CA
+        /// store is used instead.
+        QList<QSslCertificate> caCerts;
+        /// CLI: --bitcoind-tls-hostname.  The name we require to appear in the remote bitcoind's certificate (CN or
+        /// SAN).  If empty, the host portion of --bitcoind is used.  Only used if `verify` is true.
+        QString peerVerifyName;
+        /// CLI: --bitcoind-tls-cert.  The client certificate chain we present to the remote bitcoind.  Either empty
+        /// (present no client certificate), or 1 or more certificates (leaf first).
+        QList<QSslCertificate> certChain;
+        /// CLI: --bitcoind-tls-key.  The private key that goes with `certChain`.
+        QSslKey key;
+        /// The file names as specified by the user; saved here for Options::toMap() and for log messages.
+        QString caFile, certFile, keyFile;
+
+        /// True iff the user configured a client certificate for us to present to the remote bitcoind.
+        bool hasClientCert() const { return !certChain.isEmpty() && !key.isNull(); }
+    };
+    TlsInfo tlsInfo;
+
+    /// Reads the files specified by --bitcoind-tls-cert, --bitcoind-tls-key and --bitcoind-tls-ca into `tlsInfo`,
+    /// leaving alone any of the three whose file name is empty.  Throws BadArgs if a file cannot be read, cannot be
+    /// parsed as PEM, or if the cert and key are obviously mismatched.
+    void setTlsFiles(const QString &certFile, const QString &keyFile, const QString &caFile);
 
     /// Throws an BadArgs if file is the empty string, otherwise always succeeds
     void setCookieFile(const QString &file);
