@@ -28,10 +28,10 @@
 #include "ThreadPool.h"
 #include "ZmqSubNotifier.h"
 
+#include "ankerl/unordered_dense.h"
 #include "bitcoin/amount.h"
 #include "bitcoin/crypto/common.h"  // ReadLE32
 #include "bitcoin/transaction.h"
-#include "robin_hood/robin_hood.h"
 
 #include <algorithm>
 #include <cassert>
@@ -829,7 +829,7 @@ struct Controller::StateMachine
     int nHeaders = -1; ///< the number of headers our bitcoind has, in the chain we are synching
     BTC::Net net = BTC::Net::Invalid;  ///< This gets set by calls to getblockchaininfo by parsing the "chain" in the resulting dict
 
-    robin_hood::unordered_map<unsigned, VarDLTaskResult> dlResults; // mapping of height -> variant[PreProcessedBlock|RpaOnlyModeDataPtr] (we use robin_hood because it's faster for frequent updates)
+    ankerl::unordered_dense::map<unsigned, VarDLTaskResult> dlResults; // mapping of height -> variant[PreProcessedBlock|RpaOnlyModeDataPtr] (we use ankerl because it's faster for frequent updates)
     unsigned startheight = 0, ///< the height we started at
              endHeight = 0; ///< the final (inclusive) block height we expect to receive to pronounce the synch done
 

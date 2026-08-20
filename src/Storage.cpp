@@ -5622,7 +5622,7 @@ namespace {
 
 #ifdef ENABLE_TESTS
 #include "Storage/RecordFile.h"
-#include "robin_hood/robin_hood.h"
+#include "ankerl/unordered_dense.h"
 namespace {
 
     template<size_t NB>
@@ -5676,7 +5676,7 @@ namespace {
         using CtrType = decltype(DeduceSmallestTypeForNumBytes<NB <= 2 ? (NB == 1 ? 4 : 2) : 1>());
         const auto nrec = rf->numRecords();
         Log() << "Records: " << nrec;
-        robin_hood::unordered_flat_map<KeyType, CtrType> cols;
+        ankerl::unordered_dense::map<KeyType, CtrType> cols;
         Log() << "Reserving table ...";
         size_t nCols = 0, maxCol = 0;
         KeyType maxColVal = 0;

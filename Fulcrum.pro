@@ -447,8 +447,8 @@ HEADERS += \
     WebSocket.h \
     ZmqSubNotifier.h
 
-# Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
-HEADERS += robin_hood/robin_hood.h
+# Drop-in replacement for std::unordered_(map)|(set) -- used to be called "robin_hood"
+HEADERS += ankerl/stl.h ankerl/unordered_dense.h
 
 RESOURCES += \
     resources.qrc

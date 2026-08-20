@@ -64,7 +64,7 @@ struct Mempool
 
         struct IOInfo {
             /// spends. .confirmedSpends here affects get_balance.
-            /// We use std::map here because it wastes less space than robin_hood or unordered_map (and may even be faster than hashing on TXO for small maps)
+            /// We use std::map here because it wastes less space than ankerl or unordered_map (and may even be faster than hashing on TXO for small maps)
             std::map<TXO, TXOInfo>
                 /// Spends of txo's from the db (confirmed) utxoset.
                 /// - Items here get _subtracted_ from the "unconfirmed" in RPC get_balance.
@@ -86,7 +86,7 @@ struct Mempool
         };
 
         /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can
-        /// save space vs. robin_hood for immutable maps (which this is, once built)
+        /// save space vs. ankerl for immutable maps (which this is, once built)
         std::unordered_map<HashX, IOInfo, HashHasher> hashXs;
 
         using RpaPrefixSet = std::unordered_set<Rpa::Prefix, Rpa::Prefix::Hasher>;
