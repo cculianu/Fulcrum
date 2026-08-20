@@ -74,7 +74,22 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 :   Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file under rpcbind- and rpcport-.
 
 --bitcoind-tls
-:   If specified, connect to the remote bitcoind via HTTPS rather than the usual HTTP. Historically, bitcoind supported only JSON-RPC over HTTP; however, some implementations such as *bchd* support HTTPS. If you are using *fulcrum* with *bchd*, you either need to start *bchd* with the `notls` option, or you need to specify this option to *fulcrum*.
+:   If specified, connect to the remote bitcoind via HTTPS rather than the usual HTTP. Historically, bitcoind supported only JSON-RPC over HTTP; however, some implementations such as *bchd* support HTTPS. If you are using *fulcrum* with *bchd*, you either need to start *bchd* with the `notls` option, or you need to specify this option to *fulcrum*. Note that this option by itself only encrypts the connection to the daemon; it does not authenticate either end of it. See the --bitcoind-tls-* options below to add authentication.
+
+--bitcoind-tls-verify
+:   If specified, verify the certificate presented by the remote bitcoind. Requires --bitcoind-tls. The certificate is checked against the CA certificate(s) given by --bitcoind-tls-ca, or against the system CA store if that option is absent. Without this option, any certificate whatsoever is accepted.
+
+--bitcoind-tls-ca <crtfile>
+:   Specify a PEM file containing the CA certificate(s) to trust when verifying the certificate presented by the remote bitcoind. Requires --bitcoind-tls-verify. If this option is absent, the system CA store is used.
+
+--bitcoind-tls-hostname <hostname>
+:   Specify the host name that must appear (as the common name or as a subject alternative name) in the certificate presented by the remote bitcoind. Requires --bitcoind-tls-verify. If this option is absent, the host name given to -b/--bitcoind is used.
+
+--bitcoind-tls-cert <crtfile>
+:   Specify a PEM file containing the client certificate to present to the remote bitcoind, for setups where the remote end requires client certificate authentication ("mTLS"). The file may contain either a single certificate or a leaf-first certificate chain. Requires --bitcoind-tls. If this option is specified, --bitcoind-tls-key must also be specified.
+
+--bitcoind-tls-key <keyfile>
+:   Specify a PEM file containing the unencrypted private key that goes with the certificate specified in --bitcoind-tls-cert. Passphrase-protected keys are not supported. If this option is specified, --bitcoind-tls-cert must also be specified.
 
 -u, --rpcuser <username>
 :   Specify a username to use for authenticating to bitcoind. This option should be the same username you specified in your bitcoind.conf file under rpcuser-. For security, you may omit this option from the command-line and use the RPCUSER environment variable instead (the CLI arg takes precedence if both are present), or you may use -K instead.
