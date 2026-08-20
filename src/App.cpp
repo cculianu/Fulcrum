@@ -956,7 +956,7 @@ void App::parseArgs()
         tlsInfo.peerVerifyName = hostName;
         options->bdRPCInfo.setTlsFiles(certFile, keyFile, caFile); // may throw BadArgs
 
-        if (options->bdRPCInfo.tls)
+        if (tlsInfo.verify || tlsInfo.hasClientCert()) // stay quiet if the admin configured none of this
             Util::AsyncOnObject(this, [tlsInfo] {
                 Debug() << "config: bitcoind_tls_verify = " << (tlsInfo.verify ? "true" : "false");
                 if (tlsInfo.verify) {
