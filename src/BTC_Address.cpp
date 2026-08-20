@@ -36,6 +36,7 @@
 #  include "App.h"
 #  include "Compat.h"
 #  include "Json/Json.h"
+#  include "bitcoin/cashaddr.h"
 #  include <QRandomGenerator>
 #  include <iostream>
 #  include <thread>
@@ -773,6 +774,49 @@ namespace BTC
             }
         }
         Print() << vectors.size() << " test vectors passed";
+
+        Print() << "------------------------------------";
+        Print() << "Testing Cash Tokens CashAddr \"invalid\" test vectors ...";
+        const QString invalidCases[] = {
+            "prefix:x32nx6hz",
+            "prEfix:x64nx6hz",
+            "prefix:x64nx6Hz",
+            "pref1x:6m8cxv73",
+            "prefix:",
+            ":u9wsx07j",
+            "bchreg:555555555555555555x55555555555555555555555555udxmlmrz",
+            "bchreg:555555555555555555555555555555551555555555555udxmlmrz",
+            "pre:fix:x32nx6hz",
+            "prefixx64nx6hz",
+            "",
+            ":",
+            "p",
+            "p:",
+            "p:g",
+            "p:gp",
+            "p:gpf",
+            "p:gpf8",
+            "p:gpf8m",
+            "p:gpf8m4",
+            "p:gpf8m4h",
+            "rpzrrzpr:",
+            "rqiqkqiqr:",
+            "c:qvdy2z3",
+        };
+        for (const auto &addrString : invalidCases) {
+            Print() << "Testing \"" << addrString << "\" ...";
+            Address addr = Address::fromString(addrString);
+            if (addr.isValid()) {
+                Error() << "Expected address to be invalid, was valid instead";
+                return false;
+            }
+            const auto && [prefix, payload] = bitcoin::cashaddr::Decode(addrString.toStdString(), "");
+            if (!prefix.empty() || !payload.empty()) {
+                Error() << "Expected prefix and payload empty";
+                return false;
+            }
+        }
+        Print() << std::size(invalidCases) << " \"invalid\" test vectors passed";
 
         Print() << "------------------------------------";
         Print() << "address test success";
