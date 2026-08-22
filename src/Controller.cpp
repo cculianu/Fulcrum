@@ -499,7 +499,6 @@ struct DownloadBlocksTask : CtlTask
     int q_ct = 0;
     const int max_q; // todo: tune this, for now it is numBitcoinDClients + 1
 
-    static constexpr int HEADER_SIZE = BTC::GetBlockHeaderSize();
 
     std::atomic<size_t> nTx = 0, nIns = 0, nOuts = 0;
 
@@ -577,9 +576,10 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
             submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){
                 try {
                     auto rawblock = Util::ParseHexFast(resp.result().toByteArray());
-                    const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
+                    // header size depends on whether this is a legacy or an extended (BLAKE2b) header
+                    const auto header = rawblock.left(BTC::GetBlockHeaderSize(rawblock)); // we need a deep copy of this anyway so might as well take it now.
                     QByteArray chkHash;
-                    if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
+                    if (bool sizeOk = BTC::IsHeaderSizeOk(header); sizeOk && (chkHash = BTC::HeaderHashRev(header)) == hash) {
                         PreProcessedBlockPtr maybe_ppb; // either this is filled
                         Controller::RpaOnlyModeDataPtr maybe_rpaOnlyMode;  // or this is.. but not both!
                         try {

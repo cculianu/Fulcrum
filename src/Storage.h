@@ -526,6 +526,14 @@ private:
 
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;
+    /// A header record holds the first 80 bytes. If those say the header is the extended (BLAKE2b) form, this
+    /// appends its 84-byte tail from the `headers_v2` table. A no-op for legacy headers, which is every header
+    /// on a chain that has not activated the hardfork.
+    void appendHeaderTailIfV2(Header &record, BlockHeight height) const;
+    /// Creates the `headers_v2` table if it does not exist yet, and returns its handle. Called the first time
+    /// an extended header is written, so a chain that never activates the hardfork never gains the table and
+    /// its database stays readable by a build without this support.
+    rocksdb::ColumnFamilyHandle *headersV2ColumnFamily();
 
     /// thread-safe helper that returns hashed headers starting from start up until count (hashes are in bitcoin memory order)
     std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
@@ -567,8 +575,10 @@ RocksDB: "meta" √
 RocksDB: "headers" √
   Purpose:  Data store for headers.
   Key: Bucket number (VarIntBE encoding)
-  Data layout:  Each header is 80 bytes and they are laid out 1 after the other in buckets of size 8. See
-                DBRecordArray.cpp for how this data layout works.
+  Data layout:  Each record is 164 bytes (the max header size) and they are laid out 1 after the other in
+                buckets of size 8. Legacy 80-byte headers are zero-padded out to the record size; a header's
+                real length is recoverable from the top bit of its own version field. See DBRecordArray.cpp
+                for how this data layout works.
 
 RocksDB: "txnum2txhash" √
   Purpose:  Mapping of TxNum -> TxId(hash)

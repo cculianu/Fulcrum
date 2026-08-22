@@ -149,8 +149,23 @@ namespace BTC
     /// Appends prefix + token data to the end of byte stream `ba`. Will pre-reserve space first. May throw (unlikely).
     void SerializeTokenDataWithPrefix(QByteArray &ba, const bitcoin::token::OutputData *ptokenData);
 
-    /// Helper -- returns the size of a block header. Should always be 80. Update this if that changes.
-    constexpr int GetBlockHeaderSize() noexcept { return 80; }
+    /// Serialized size of a legacy (SHA256d) block header.
+    constexpr int GetBlockHeaderSizeV1() noexcept { return int(bitcoin::CBlockHeader::V1_SIZE); }
+    /// Serialized size of an extended (BLAKE2b) block header, which is also the max size of any header.
+    constexpr int GetBlockHeaderSizeV2() noexcept { return int(bitcoin::CBlockHeader::V2_SIZE); }
+
+    /// True iff the header serialized at the front of `hdr` is an extended (BLAKE2b) header, which it signals
+    /// by setting the top bit of its little-endian version field.
+    inline bool IsHeaderV2(const QByteArray &hdr) noexcept {
+        return hdr.size() >= 4 && (static_cast<uint8_t>(hdr[3]) & 0x80u);
+    }
+    /// The serialized size of the header at the front of `hdr`, or 0 if `hdr` is too short to tell.
+    inline int GetBlockHeaderSize(const QByteArray &hdr) noexcept {
+        if (hdr.size() < 4) return 0;
+        return IsHeaderV2(hdr) ? GetBlockHeaderSizeV2() : GetBlockHeaderSizeV1();
+    }
+    /// True iff `hdr` is a complete, correctly-sized serialized header.
+    inline bool IsHeaderSizeOk(const QByteArray &hdr) noexcept { return hdr.size() == GetBlockHeaderSize(hdr); }
 
     /// Returns the sha256 double hash (not reveresed -- little endian) of the input QByteArray. The results are copied
     /// once from the hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash
@@ -164,6 +179,11 @@ namespace BTC
     extern QByteArray HashTwo(const QByteArray &a, const QByteArray &b);
     /// Convenient alias for Hash(b, true)
     inline QByteArray HashOnce(const QByteArray &b) { return Hash(b, true); }
+    /// The block hash of the serialized header `hdr`, in bitcoin memory order (little-endian). Legacy headers
+    /// take the fast sha256d path; extended (BLAKE2b) headers are deserialized and hashed properly.
+    extern QByteArray HeaderHash(const QByteArray &hdr);
+    /// Identical to the above but REVERSED (big-endian, as bitcoind renders it).
+    extern QByteArray HeaderHashRev(const QByteArray &hdr);
     /// Like the Hash() function above, except does hash160 once. (not reversed).
     extern QByteArray Hash160(const QByteArray &);
     /// Hash any Bitcoin object in-place and return the hash. If `once` == true, we do single-sha256 hashing. If
@@ -215,7 +235,7 @@ namespace BTC
         /// returns the height, 80 byte header of the last header seen. If no headers seen, returns (-1, Empty QByteArray)
         std::pair<int, QByteArray> lastHeaderProcessed() const;
 
-        bool isValid() const { return prev.length() == GetBlockHeaderSize(); }
+        bool isValid() const { return IsHeaderSizeOk(prev); }
         void reset(unsigned nextHeight = 0, QByteArray prevHeader = QByteArray()) { prevHeight = long(nextHeight)-1; prev = prevHeader; }
     };
 

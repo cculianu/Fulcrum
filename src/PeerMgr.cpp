@@ -758,7 +758,7 @@ auto PeerMgr::headerToVerifyWithPeer() const -> std::optional<HeightHeaderPair>
             const auto height = curHeight - cutoff;
             QString err = "Bad size";
             auto optHdr = storage->headerForHeight(height, &err);
-            if ( optHdr.value_or(Storage::Header{}).length() == BTC::GetBlockHeaderSize() ) {
+            if ( BTC::IsHeaderSizeOk(optHdr.value_or(Storage::Header{})) ) {
                 ret.emplace(height, optHdr.value());
             } else
                 Warning() << "PeerMgr: Failed to retrieve header " << height << ": " << err;
@@ -996,7 +996,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
             Bad("Unexpected header response");
             return;
         }
-        const auto  hdr = Util::ParseHexFast(reply.result().toString().trimmed().left(BTC::GetBlockHeaderSize()*2).toLower().toUtf8());
+        const auto  hdr = Util::ParseHexFast(reply.result().toString().trimmed().left(BTC::GetBlockHeaderSizeV2()*2).toLower().toUtf8());
         if (hdr != headerToVerify.value().second) {
             Bad(QString("Peer appears to be on a different chain (header verification failed for height %1)").arg(headerToVerify.value().first));
             return;

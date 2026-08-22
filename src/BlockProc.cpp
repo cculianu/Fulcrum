@@ -41,7 +41,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, const BlockHash &blockHash
     hash = blockHash;
     sizeBytes = blockSize;
     header = b.GetBlockHeader();
-    estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSize());
+    estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSizeV2());
     txInfos.reserve(b.vtx.size());
     std::unordered_map<TxHash, unsigned, HashHasher> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 1.0 and avoid over-allocating the hash table
     txHashToIndex.max_load_factor(1.0);

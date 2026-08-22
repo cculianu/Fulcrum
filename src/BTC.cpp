@@ -100,11 +100,26 @@ namespace BTC
         return ret;
     }
 
+    QByteArray HeaderHash(const QByteArray &hdr)
+    {
+        if (!IsHeaderV2(hdr))
+            return Hash(hdr); // fast path: sha256d over the 80 bytes
+        const auto hash = Deserialize<bitcoin::CBlockHeader>(hdr).GetHash();
+        return QByteArray(reinterpret_cast<const char *>(hash.begin()), int(hash.size()));
+    }
+
+    QByteArray HeaderHashRev(const QByteArray &hdr)
+    {
+        if (!IsHeaderV2(hdr))
+            return HashRev(hdr); // fast path: sha256d over the 80 bytes
+        return Hash2ByteArrayRev(Deserialize<bitcoin::CBlockHeader>(hdr).GetHash());
+    }
+
     // HeaderVerifier helper
     bool HeaderVerifier::operator()(const QByteArray & header, QString *err)
     {
         const long height = prevHeight+1;
-        if (header.size() != BTC::GetBlockHeaderSize()) {
+        if (!IsHeaderSizeOk(header)) {
             if (err) *err = QString("Header verification failed for header at height %1: wrong size").arg(height);
             return false;
         }
@@ -120,7 +135,7 @@ namespace BTC
     {
         const long height = prevHeight+1;
         QByteArray header = Serialize(curHdr);
-        if (header.size() != BTC::GetBlockHeaderSize()) {
+        if (!IsHeaderSizeOk(header)) {
             if (err) *err = QString("Header verification failed for header at height %1: wrong size").arg(height);
             return false;
         }
@@ -138,7 +153,7 @@ namespace BTC
             if (err) *err = QString("Header verification failed for header at height %1: failed to deserialize").arg(height);
             return false;
         }
-        if (!prev.isEmpty() && Hash(prev) != QByteArray::fromRawData(reinterpret_cast<const char *>(curHdr.hashPrevBlock.begin()), int(curHdr.hashPrevBlock.width())) ) {
+        if (!prev.isEmpty() && HeaderHash(prev) != QByteArray::fromRawData(reinterpret_cast<const char *>(curHdr.hashPrevBlock.begin()), int(curHdr.hashPrevBlock.width())) ) {
             if (err) *err = QString("Header %1 'hashPrevBlock' does not match the contents of the previous block").arg(height);
             return false;
         }

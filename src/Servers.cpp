@@ -1357,16 +1357,16 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId,
         // EX doesn't seem to return error here if invalid height/no results, so we will do same.
         const auto hdrs = storage->headersFromHeight(height, std::min(count, MAX_COUNT));
         const size_t nHdrs = hdrs.size();
-        constexpr size_t hdrSz = BTC::GetBlockHeaderSize(), hdrHexSz = hdrSz*2u;
         QVariantMap resp{
             {"count", quint32(nHdrs)},
             {"max", MAX_COUNT}
         };
         auto getHeaderAndCheckSize = [&](size_t i) -> const QByteArray & {
             const auto & hdr = hdrs[i];
-            if (hdr.size() != QByteArray::size_type(hdrSz)) [[unlikely]] { // ensure header looks the right size
+            if (!BTC::IsHeaderSizeOk(hdr)) [[unlikely]] { // ensure header looks the right size
                 // this should never happen.
-                Error() << "Header size from db height " << i + height << " is not " << hdrSz << " bytes! Database corruption likely! FIXME!";
+                Error() << "Header size from db height " << i + height << " is " << hdr.size()
+                        << " bytes, which is not a valid header size! Database corruption likely! FIXME!";
                 throw RPCError("Server header store invalid", RPC::Code_InternalError);
             }
             return hdr;
@@ -1381,12 +1381,18 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId,
             }
             resp["headers"] = headers;
         } else {
-            // Protocol version < 1.6.0, return a concatenated string of header hex
-            QByteArray hexHeaders(QByteArray::size_type(nHdrs * hdrHexSz), Qt::Uninitialized);
-            for (size_t i = 0, offset = 0; i < nHdrs; ++i, offset += hdrHexSz) {
-                const auto & hdr = getHeaderAndCheckSize(i);
+            // Protocol version < 1.6.0, return a concatenated string of header hex. Note that with the BLAKE2b
+            // hardfork headers are no longer all the same size, so this blob must be split by reading each
+            // header's version field, rather than at a fixed stride.
+            size_t totalHexSz = 0;
+            for (size_t i = 0; i < nHdrs; ++i) totalHexSz += size_t(getHeaderAndCheckSize(i).size()) * 2u;
+            QByteArray hexHeaders(QByteArray::size_type(totalHexSz), Qt::Uninitialized);
+            for (size_t i = 0, offset = 0; i < nHdrs; ++i) {
+                const auto & hdr = hdrs[i];
+                const size_t hdrHexSz = size_t(hdr.size()) * 2u;
                 // fast, in-place conversion to hex
                 Util::ToHexFastInPlace(hdr, hexHeaders.data() + offset, hdrHexSz);
+                offset += hdrHexSz;
             }
             if (hexHeaders.isEmpty())
                 resp["hex"] = QString(""); // we cast to QString to prevent JSON null for empty string ""
@@ -2306,7 +2312,7 @@ void Server::rpc_blockchain_transaction_get_confirmed_blockhash(Client *c, const
             throw RPCError("No confirmed transaction matching the requested hash was found");
         const auto & [blockHeight, blockHeader] = *optPair;
         QVariantMap ret{
-            { "block_hash", Util::ToHexFast(BTC::HashRev(blockHeader)) },
+            { "block_hash", Util::ToHexFast(BTC::HeaderHashRev(blockHeader)) },
             { "block_height", blockHeight },
         };
         if (includeHeader) ret.insert("block_header", Util::ToHexFast(blockHeader));
