@@ -458,6 +458,7 @@ contains(DEFINES, ENABLE_TESTS) {
     HEADERS += \
         tests/Tests.h
     SOURCES += \
+        tests/BlockHeader_tests.cpp \
         tests/ByteView_tests.cpp \
         tests/Util_tests.cpp \
         tests/VarInt_tests.cpp
@@ -471,6 +472,7 @@ SOURCES += \
     bitcoin/cashaddr.cpp \
     bitcoin/cashaddrenc.cpp \
     bitcoin/crypto/aes.cpp \
+    bitcoin/crypto/blake2b.cpp \
     bitcoin/crypto/chacha20.cpp \
     bitcoin/crypto/ctaes/ctaes.c \
     bitcoin/crypto/hmac_sha256.cpp \
@@ -505,6 +507,7 @@ HEADERS += \
     bitcoin/crypto/byteswap.h \
     bitcoin/crypto/endian.h \
     bitcoin/crypto/aes.h \
+    bitcoin/crypto/blake2b.h \
     bitcoin/crypto/chacha20.h \
     bitcoin/crypto/common.h \
     bitcoin/crypto/ctaes/ctaes.h \

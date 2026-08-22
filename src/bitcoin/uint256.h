@@ -110,6 +110,19 @@ public:
 
 
 /**
+ * 128-bit opaque blob.
+ * @note This type is called uint128 for historical reasons only. It is an
+ * opaque blob of 128 bits and has no integer operations.
+ */
+class uint128 : public base_blob<128> {
+public:
+    // inherit c'tors
+    using base_blob<128>::base_blob;
+    // base type copy
+    explicit constexpr uint128(const base_blob<128> &b) noexcept : base_blob<128>(b) {}
+};
+
+/**
  * 160-bit opaque blob.
  * @note This type is called uint160 for historical reasons only. It is an
  * opaque blob of 160 bits and has no integer operations.

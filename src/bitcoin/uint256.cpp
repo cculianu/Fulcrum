@@ -71,6 +71,13 @@ void base_blob<BITS>::SetHex(const std::string &str) noexcept {
     SetHex(str.c_str());
 }
 
+// Explicit instantiations for base_blob<128>
+template base_blob<128>::base_blob(const std::vector<uint8_t> &) noexcept;
+template std::string base_blob<128>::GetHex() const;
+template std::string base_blob<128>::ToString() const;
+template void base_blob<128>::SetHex(const char *) noexcept;
+template void base_blob<128>::SetHex(const std::string &) noexcept;
+
 // Explicit instantiations for base_blob<160>
 template base_blob<160>::base_blob(const std::vector<uint8_t> &) noexcept;
 template std::string base_blob<160>::GetHex() const;
