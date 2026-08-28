@@ -316,6 +316,8 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 // almost worthless on 27.0.0 (according to ElectrumX devs), and so we require 28.0.0.
                 // See: https://github.com/spesmilo/electrum-protocol/pull/6/files#r2459860616
                 rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 28, 0};
+                // The optional "blockhash" 3rd arg to `getrawtransaction` is Bitcoin Core 0.16.0+
+                rsi.getRawTransactionAcceptsBlockHash = res.isCore && bitcoinDInfo.version >= Version{0, 16, 0};
                 if (res.isCore && !rsi.hasSubmitPackageRPC) // warn admin about lack of submitpackage support
                     Warning() << "*** Compatibility Warning *** The BTC full node backing this " APPNAME " instance"
                                  " lacks a known-good `submitpackage` RPC, which is needed for full Electrum protocol"
@@ -1079,6 +1081,7 @@ QVariantMap BitcoinDInfo::toVariantMap() const
     ret["hasDSProofRPC"] = rpcSupportInfo.hasDSProofRPC;
     ret["sendRawTransactionRequiresMaxBurnAmount"] = rpcSupportInfo.sendRawTransactionRequiresMaxBurnAmount;
     ret["hasSubmitPackageRPC"] = rpcSupportInfo.hasSubmitPackageRPC;
+    ret["getRawTransactionAcceptsBlockHash"] = rpcSupportInfo.getRawTransactionAcceptsBlockHash;
     ret["isCore"] = isCore;
     ret["isLTC"] = isLTC;
     ret["isBU"] = isBU;

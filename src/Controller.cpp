@@ -213,14 +213,21 @@ void Controller::startup()
         }
     }, Qt::QueuedConnection);
 
-    // Checks if the remote bitcoind has -txindex or can serve arbitrary transactions. Called initially when upToDate()
-    // is first emitted, and disconnects itself from upToDate if we did in fact detect that bitcoind can serve arbitrary
-    // tx's. If there is an error retrieving tx #1, it will warn the user to enable txindex.
+    // Checks that the remote bitcoind can serve a confirmed transaction to us, by asking it for tx #1. Called initially
+    // when upToDate() is first emitted, and disconnects itself from upToDate once that succeeds.
     // Assumption: tx #1 is not a bitcoind wallet tx. (If it is, then we will get a possible false positive here).
     auto connPtr2 = std::make_shared<QMetaObject::Connection>();
     *connPtr2 = connect(this, &Controller::upToDate, this, [this, connPtr2] {
         const auto optHash = storage->hashForTxNum(1, false, nullptr, true); // skip cache, read from txNum2txHash file to get first non-genesis tx hash
         if (!optHash) return; // no blocks yet, somehow. must be a brand new chain. we will be called again later when blocks start showing up.
+        // We name the block when we can, matching what rpc_blockchain_transaction_get does -- so what this verifies is
+        // what that method actually needs, rather than -txindex, which it no longer requires.
+        QVariantList params{ Util::ToHexFast(*optHash), false };
+        if (bitcoindmgr->getRpcSupportInfo().getRawTransactionAcceptsBlockHash) {
+            if (const auto optPair = storage->getConfirmedTxBlockHeightAndHeader(*optHash))
+                params.push_back(Util::ToHexFast(BTC::HashRev(optPair->second)));
+        }
+        const bool named = params.size() > 2;
         auto onSuccess = [this, connPtr2, hash=*optHash] (const RPC::Message &resp) {
             bitcoin::CMutableTransaction tx;
             constexpr auto kErrLine2 = "Something is wrong with either BitcoinD or our ability to understand its RPC responses.";
@@ -236,23 +243,31 @@ void Controller::startup()
                 Error() << kErrLine2;
                 return;
             }
-            DebugM("BitcoinD verified to have txindex enabled");
+            DebugM("BitcoinD verified able to serve a confirmed transaction");
             // success! disconnect the slot now, connPtr2 will delete the managed object when we return.
             disconnect(*connPtr2);
         };
-        auto onError = [] (const RPC::Message &resp) {
-            Error() << "\n"
-                    << "******************************************************************************\n"
-                    << "*   Error: txindex verification failed!                                      *\n"
-                    << "*   Please ensure that your BitcoinD node has txindex enabled (-txindex=1)   *\n"
-                    << "******************************************************************************\n\n"
-                    << "Error response was:\n\n\t" << resp.errorMessage() << "\n\n";
+        auto onError = [named] (const RPC::Message &resp) {
+            if (named)
+                Error() << "\n"
+                        << "*******************************************************************************\n"
+                        << "*   Error: BitcoinD could not return a transaction from a block we indexed!   *\n"
+                        << "*   If it is pruned, its RPC endpoint must be able to serve pruned blocks.    *\n"
+                        << "*******************************************************************************\n\n"
+                        << "Error response was:\n\n\t" << resp.errorMessage() << "\n\n";
+            else
+                Error() << "\n"
+                        << "******************************************************************************\n"
+                        << "*   Error: txindex verification failed!                                      *\n"
+                        << "*   Please ensure that your BitcoinD node has txindex enabled (-txindex=1)   *\n"
+                        << "******************************************************************************\n\n"
+                        << "Error response was:\n\n\t" << resp.errorMessage() << "\n\n";
         };
         auto onFail = [] (RPC::Message::Id, const QString &errMsg) {
-            Warning() << "Unable to verify that BitcoinD is using txindex. Error: " << errMsg;
+            Warning() << "Unable to verify that BitcoinD can serve a confirmed transaction. Error: " << errMsg;
         };
-        // ask bitcoind for tx #1 (first tx after genesis) to ensure it has txindex enabled.
-        bitcoindmgr->submitRequest(this, IdMixin::newId(), "getrawtransaction", {Util::ToHexFast(*optHash), false}, onSuccess, onError, onFail);
+        // ask bitcoind for tx #1 (first tx after genesis) to ensure it can serve us a confirmed transaction.
+        bitcoindmgr->submitRequest(this, IdMixin::newId(), "getrawtransaction", params, onSuccess, onError, onFail);
     }, Qt::QueuedConnection);
 
     {

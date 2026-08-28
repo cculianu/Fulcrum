@@ -2273,18 +2273,35 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchI
             throw RPCError("Invalid verbose argument; expected boolean");
         verbose = verbArg;
     }
-    generic_async_to_bitcoind(c, batchId, m.id, "getrawtransaction", QVariantList{ Util::ToHexFast(txHash), verbose },
-        // use the default success func, which just echoes the bitcoind reply to the client
-        BitcoinDSuccessFunc(),
-        // error func, throw an RPCError
-        [](const RPC::Message & errResponse) {
-            // EX does this weird thing.. we do it too for now until we can verify not doing it won't break old EC
-            // clients... TODO: see if this can be removed in favor of a more canonical error message.
-            throw RPCError(formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(errResponse),
-                           RPC::Code_App_DaemonError);
-        }
-    );
-    // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
+    // error func, throw an RPCError
+    const auto errorFunc = [](const RPC::Message & errResponse) {
+        // EX does this weird thing.. we do it too for now until we can verify not doing it won't break old EC
+        // clients... TODO: see if this can be removed in favor of a more canonical error message.
+        throw RPCError(formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(errResponse),
+                       RPC::Code_App_DaemonError);
+    };
+
+    if (!bitcoindmgr->getRpcSupportInfo().getRawTransactionAcceptsBlockHash) {
+        generic_async_to_bitcoind(c, batchId, m.id, "getrawtransaction", QVariantList{ Util::ToHexFast(txHash), verbose },
+            // use the default success func, which just echoes the bitcoind reply to the client
+            BitcoinDSuccessFunc(), errorFunc);
+        // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
+        return;
+    }
+
+    // Naming the block lets bitcoind skip the txindex, which a pruning node cannot have at all.
+    generic_do_async(c, batchId, m.id,
+        // Work -- this runs in a threadpool thread
+        [txHash, verbose, this] {
+            QVariantList params{ Util::ToHexFast(txHash), verbose };
+            if (const auto optPair = storage->getConfirmedTxBlockHeightAndHeader(txHash))
+                params.push_back(Util::ToHexFast(BTC::HashRev(optPair->second)));
+            return params;
+        },
+        // Completion function -- this runs in this object's thread, only if `c` is still alive!
+        [c, batchId, mId = m.id, errorFunc, this](const QVariantList & params) {
+            generic_async_to_bitcoind(c, batchId, mId, "getrawtransaction", params, BitcoinDSuccessFunc(), errorFunc);
+        });
 }
 void Server::rpc_blockchain_transaction_get_confirmed_blockhash(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
