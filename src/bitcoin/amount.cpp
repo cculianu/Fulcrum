@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The Bitcoin developers
+// Copyright (c) 2017-present The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -28,12 +28,12 @@ std::string GetCurrencyUnit() {
 }
 // /added by Calin
 
-std::string Amount::ToString() const {
+std::string Amount::ToString(const bool omitUnit) const {
     // Modified by Calin to properly handle negative values
     const bool negative = *this < Amount::zero();
     const Amount absVal = negative ? -1 * *this : *this;
-    return strprintf("%s%d.%08d %s", negative ? "-" : "", absVal / COIN, (absVal % COIN) / SATOSHI,
-                     GetCurrencyUnit());
+    return strprintf("%s%d.%08d%s", negative ? "-" : "", absVal / COIN, (absVal % COIN) / SATOSHI,
+                     omitUnit ? "" : (" " + GetCurrencyUnit()));
 }
 
 } // end namespace bitcoin

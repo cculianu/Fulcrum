@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017-2024 The Bitcoin developers
+// Copyright (c) 2017-present The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -113,7 +113,7 @@ public:
         return stream << ca.amount;
     }
 
-    std::string ToString() const;
+    std::string ToString(bool omitUnit = false) const;
 
     // serialization support
     SERIALIZE_METHODS(Amount, obj) { READWRITE(obj.amount); }
