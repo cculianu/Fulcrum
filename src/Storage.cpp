@@ -3777,11 +3777,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 for (const auto & hashX : newHashXInputsResolved) {
                     auto & ag = ppb->hashXAggregated[hashX];
                     std::sort(ag.ins.begin(), ag.ins.end()); // make sure they are sorted
-                    std::sort(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
-                    auto last = std::unique(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
-                    ag.txNumsInvolvingHashX.erase(last, ag.txNumsInvolvingHashX.end());
+                    Util::sortAndUniqueify(ag.txNumsInvolvingHashX, /*shrinkIfSupported=*/true);
                     ag.ins.shrink_to_fit();
-                    ag.txNumsInvolvingHashX.shrink_to_fit();
                 }
 
                 if constexpr (debugPrt)
@@ -4093,9 +4090,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                     // We are doing this here to illustrate that this invariant in the data is very important.
                     // Block undo is intended to be an infrequent process (and thus not especially performance-critical),
                     // so this does no harm.
-                    std::sort(newVec.begin(), newVec.end());
-                    auto last = std::unique(newVec.begin(), newVec.end());
-                    newVec.erase(last, newVec.end());
+                    Util::sortAndUniqueify(newVec, /*shrinkIfSupported=*/false);
                 }
                 if (!newVec.empty()) {
                     // the sh still has some history, write it to db

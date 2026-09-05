@@ -214,12 +214,9 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, const BlockHash &blockHash
     for (auto & [hashX, ag] : hashXAggregated ) {
         std::sort(ag.ins.begin(), ag.ins.end());
         std::sort(ag.outs.begin(), ag.outs.end());
-        std::sort(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
-        auto last = std::unique(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
-        ag.txNumsInvolvingHashX.erase(last, ag.txNumsInvolvingHashX.end());
+        Util::sortAndUniqueify(ag.txNumsInvolvingHashX, /*shrinkIfSupported=*/true);
         ag.ins.shrink_to_fit();
         ag.outs.shrink_to_fit();
-        ag.txNumsInvolvingHashX.shrink_to_fit();
         // tally up space usage
         estimatedThisSizeBytes +=
                 sizeof(ag) + size_t(hashX.size()) + ag.ins.size() * sizeof(decltype(ag.ins)::value_type)
