@@ -798,7 +798,7 @@ QString Log::colorString(Color c) {
     case Magenta: suffix = "[35m"; break;
     case Cyan: suffix = "[36m"; break;
     case White: suffix = "[37m"; break;
-    case BrightBlack: suffix = "[30;1m"; break;
+    case BrightBlack: suffix = "[02;37m"; break;
     case BrightRed: suffix = "[31;1m"; break;
     case BrightGreen: suffix = "[32;1m"; break;
     case BrightYellow: suffix = "[33;1m"; break;
