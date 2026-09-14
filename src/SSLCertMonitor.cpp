@@ -38,17 +38,25 @@ SSLCertMonitor::SSLCertMonitor(std::shared_ptr<Options> options_, QObject *paren
 }
 
 void SSLCertMonitor::start(const QString &certFile, const QString &keyFile,
-                           const QString &wssCertFile, const QString &wssKeyFile)
+                           const QString &wssCertFile, const QString &wssKeyFile,
+                           const QString &httpsCertFile, const QString &httpsKeyFile)
 {
     cert = certFile;
     key = keyFile;
     wssCert = wssCertFile;
     wssKey = wssKeyFile;
+    httpsCert = httpsCertFile;
+    httpsKey = httpsKeyFile;
 
     if (cert.isEmpty() && !wssCert.isEmpty()) {
         // copy over wssCert/wssKey to cert/key, clear wssCert/wssKey
         cert = wssCert;  wssCert.clear();
         key  = wssKey;   wssKey.clear();
+    }
+    if (cert.isEmpty() && !httpsCert.isEmpty()) {
+        // copy over httpsCert/httpsKey to cert/key, clear httpsCert/httpsKey
+        cert = httpsCert;  httpsCert.clear();
+        key  = httpsKey;   httpsKey.clear();
     }
     // sanity check
     if (cert.isEmpty() || key.isEmpty()) throw InternalError("Internal Error: cert and/or key is empty");
@@ -64,6 +72,10 @@ void SSLCertMonitor::start(const QString &certFile, const QString &keyFile,
     if (!wssCert.isEmpty() && !watcher->files().contains(wssCert)) {
         watcher->addPath(wssCert);
         watchedFiles.append(wssCert);
+    }
+    if (!httpsCert.isEmpty() && !watcher->files().contains(httpsCert)) {
+        watcher->addPath(httpsCert);
+        watchedFiles.append(httpsCert);
     }
     Util::AsyncOnObject(this, [this]{
         DebugM("SSLCertMonitor: Watching files [", watchedFiles.join(", "), "]");
@@ -123,7 +135,7 @@ void SSLCertMonitor::on_fileChanged(const QString &path)
 
         try {
             // this re-reads all the certs, if it doesn't throw they were read and stored successfully
-            start(cert, key, wssCert, wssKey);
+            start(cert, key, wssCert, wssKey, httpsCert, httpsKey);
             emit certInfoChanged();
             return false; // don't keep trying, done
         } catch (const InternalError &e) {
@@ -143,6 +155,10 @@ Options::Certs SSLCertMonitor::readCerts() const
     if (!wssCert.isEmpty()) {
         if (wssKey.isEmpty()) throw InternalError("Internal Error: wss-key is empty"); // sanity check
         certs.wssCertInfo = SSLCertMonitor::makeCertInfo(this, wssCert, wssKey);
+    }
+    if (!httpsCert.isEmpty()) {
+        if (httpsKey.isEmpty()) throw InternalError("Internal Error: https-key is empty"); // sanity check
+        certs.httpsCertInfo = SSLCertMonitor::makeCertInfo(this, httpsCert, httpsKey);
     }
     return certs;
 }
