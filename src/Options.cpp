@@ -202,6 +202,10 @@ QVariantMap Options::toMap() const
     // zmqAllowHashTx
     m["zmq_allow_hashtx"] = zmqAllowHashTx;
 
+    // zmqAllowSequence & zmqSequenceResynchIntervalSecs
+    m["zmq_allow_sequence"] = zmqAllowSequence;
+    m["zmq_sequence_resynch_interval"] = zmqSequenceResynchIntervalSecs;
+
     // upnp
     m["upnp"] = upnp;
 

@@ -330,6 +330,16 @@ public:
     static constexpr bool defaultZmqAllowHashTx = false;
     bool zmqAllowHashTx = defaultZmqAllowHashTx;
 
+    // config: zmq_allow_sequence
+    static constexpr bool defaultZmqAllowSequence = false;
+    bool zmqAllowSequence = defaultZmqAllowSequence;
+
+    // config: zmq_sequence_resynch_interval -- while mirroring the mempool via the ZMQ "sequence" topic, take a full
+    // `getrawmempool` snapshot at least this often (in seconds) as a safety net. 0 disables the periodic snapshot.
+    static constexpr unsigned defaultZmqSequenceResynchIntervalSecs = 60u, minZmqSequenceResynchIntervalSecs = 10u,
+                              maxZmqSequenceResynchIntervalSecs = 86'400u;
+    unsigned zmqSequenceResynchIntervalSecs = defaultZmqSequenceResynchIntervalSecs;
+
     // CLI: --upnp
     // config: upnp
     static constexpr bool defaultUpnp = false;

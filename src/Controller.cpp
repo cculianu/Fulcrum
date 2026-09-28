@@ -136,9 +136,24 @@ void Controller::startup()
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::zmqNotificationsChanged, this, [this](BitcoinDZmqNotifications bdzmqs) {
             // NB: this only fires if ZmqSubNotifier::isAvailable() == true
             using enum ZmqTopic::Tag;
+            // If we can mirror the mempool via the "sequence" topic, we don't subscribe to "hashtx": all it would add
+            // is redundant full mempool synchs.
+            const bool useSequence = options->zmqAllowSequence && !bdzmqs.value(ZmqTopic{Sequence}.str()).isEmpty();
+            if (options->zmqAllowSequence && !useSequence)
+                Log() << "zmq_allow_sequence is enabled, but bitcoind does not advertise a \"pubsequence\" ZMQ endpoint;"
+                         " the mempool will be synched by polling";
+            else if (useSequence && options->zmqAllowHashTx)
+                Log() << "The ZMQ \"hashtx\" topic will not be used, since the \"sequence\" topic supersedes it";
+            const auto isTopicWanted = [this, useSequence](const ZmqTopic topic) {
+                switch (topic.tag) {
+                case HashBlock: return true;
+                case HashTx: return options->zmqAllowHashTx && !useSequence;
+                case Sequence: return useSequence;
+                }
+                return false;
+            };
             for (const auto topic : zmqs.allTopics) {
-                if (const auto & topicAddr = bdzmqs.value(topic.str());
-                        !topicAddr.isEmpty() && /* if hashtx allowed: */ (topic.tag != HashTx || options->zmqAllowHashTx)) {
+                if (const auto & topicAddr = bdzmqs.value(topic.str()); !topicAddr.isEmpty() && isTopicWanted(topic)) {
                     auto & state = zmqs[topic];
                     state.lastKnownAddr = topicAddr;
                     DebugM("\"", topic.str(), "\" topic address: ", state.lastKnownAddr);
@@ -152,8 +167,8 @@ void Controller::startup()
                         zmqTopicStart(topic); // may re-start existing notifier, or create a new one if none exists
                     }
                 } else {
-                    // bitcoind lacks this topicName endpoint (e.g. lacks "hashblock" or "hashtx") -- stop existing
-                    // notifier, if it exists
+                    // bitcoind lacks this topicName endpoint (e.g. lacks "hashblock" or "hashtx"), or we don't want
+                    // this topic -- stop existing notifier, if it exists
                     zmqTopicStop(topic);
                     if (auto *state = zmqs.find(topic))
                         state->lastKnownAddr.clear(); // mark that the "last known" address is empty so we don't attempt to re-connect to it.
@@ -869,6 +884,19 @@ struct Controller::StateMachine
     QByteArray mostRecentZmqHashTxNotif;
 };
 
+/// What a mempool synch was asked to do with respect to the ZMQ "sequence" mirror (see Controller::ZmqSeqState)
+struct Controller::ZmqSeqPlan
+{
+    uint64_t epoch{}; ///< zmqSeq.epoch when the synch was planned
+    BlockHash tipHash; ///< our chain tip when the synch was planned
+    bool isDelta{}; ///< true: apply the pending events; false: take a SnapshotWithSeq
+    bool verify{}; ///< snapshot only: check that the (supposedly exact) mirror agreed with the snapshot
+    bool subscriptionLive{}; ///< we had received at least one message on the topic when this synch was planned
+    uint64_t fromSeq{}; ///< zmqSeq.nextMempoolSeq when the synch was planned
+    uint64_t deltaNextSeq{}; ///< delta only: the first mempool sequence number not covered by the delta
+    std::size_t nEvents{}; ///< delta only: the number of events folded into the delta
+};
+
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
 {
     std::shared_lock g(smLock); // this lock guarantees that 'sm' won't be deleted from underneath us
@@ -1309,6 +1337,11 @@ void Controller::process(bool beSilentIfUpToDate)
             } else
                 DebugM("zmq hashtx received while we were synching, however we have seen the txn already recently, ignoring ...");
         }
+        if (polltimeout != 0 && zmqSeqWantsImmediateSynch()) {
+            // ZMQ "sequence" events arrived while we were synching (or a resynch was requested), apply them right away
+            polltimeout = 0;
+            TraceM("zmq sequence: re-scheduling another bitcoind update immediately ...");
+        }
         {
             std::lock_guard g(smLock);
             sm.reset();  // great success!
@@ -1347,16 +1380,74 @@ void Controller::process(bool beSilentIfUpToDate)
             }
         }
 
-        auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag, mempoolIgnoreTxns);
-        task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
-        connect(task, &CtlTask::success, this, [this, task]{
-            if (!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool) [[unlikely]]
-                // task was stopped from underneath us and/or this response is stale.. so return and ignore
-                return;
+        // Decide how to synch the mempool. Normally this is a full `getrawmempool` snapshot. If we are mirroring the
+        // mempool via the ZMQ "sequence" topic, it is either a snapshot that carries the mempool sequence number (to
+        // (re)establish the baseline, after a block, and periodically as a safety net), or merely the delta of the
+        // events received since the last synch -- no `getrawmempool` at all.
+        SynchMempoolTask::Plan plan;
+        std::optional<ZmqSeqPlan> seqPlan;
+        if (zmqSeq.active) {
+            ZmqSeqPlan sp;
+            sp.epoch = zmqSeq.epoch;
+            sp.tipHash = storage->latestTip().second;
+            sp.subscriptionLive = zmqSeq.lastMsgCounter.has_value();
+            sp.fromSeq = zmqSeq.nextMempoolSeq;
+            const double now = Util::getTimeSecs();
+            const auto interval = options->zmqSequenceResynchIntervalSecs;
+            const bool tipChanged = zmqSeq.baselineValid && zmqSeq.baselineTipHash != sp.tipHash;
+            const bool periodic = zmqSeq.baselineValid && !tipChanged && interval > 0u
+                                  && now - zmqSeq.lastFullSynchTime >= double(interval);
+            if (!zmqSeq.baselineValid || tipChanged || periodic) {
+                plan.mode = SynchMempoolTask::Mode::SnapshotWithSeq;
+                // A periodic snapshot of a (supposedly) exact mirror doubles as a check that it really was exact
+                sp.verify = plan.recordDiff = periodic;
+                if (zmqSeq.resynchRequested) {
+                    zmqSeq.resynchRequested = false;
+                    zmqSeq.lastResynchTime = now;
+                }
+            } else {
+                auto delta = ZmqSequence::computeDelta(zmqSeq.pending, zmqSeq.nextMempoolSeq);
+                sp.isDelta = true;
+                sp.deltaNextSeq = delta.nextSeq;
+                sp.nEvents = delta.nEvents;
+                plan.mode = SynchMempoolTask::Mode::Delta;
+                plan.adds = std::move(delta.adds);
+                plan.drops = std::move(delta.drops);
+            }
+            seqPlan = std::move(sp);
+        }
+
+        if (seqPlan && seqPlan->isDelta && seqPlan->nEvents == 0u) {
+            // Nothing happened in the bitcoind mempool since our last synch, so there is nothing to do.
             sm->state = State::SynchMempoolFinished;
             AGAIN();
-        });
-        sm->state = State::SynchingMempool;
+        } else {
+            auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag, mempoolIgnoreTxns, std::move(plan));
+            task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
+            connect(task, &CtlTask::success, this, [this, task, seqPlan]{
+                const bool stale = !sm || isTaskDeleted(task) || sm->state != State::SynchingMempool;
+                if (seqPlan) {
+                    if (stale) [[unlikely]]
+                        // the task may have modified our mempool, so we no longer know what it reflects
+                        zmqSeqInvalidate("stale mempool synch result", false);
+                    else
+                        zmqSeqOnSynchSuccess(*task, *seqPlan);
+                }
+                if (stale) [[unlikely]]
+                    // task was stopped from underneath us and/or this response is stale.. so return and ignore
+                    return;
+                sm->state = State::SynchMempoolFinished;
+                AGAIN();
+            });
+            if (seqPlan) {
+                connect(task, &CtlTask::errored, this, [this, epoch = seqPlan->epoch]{
+                    // The generic error handler takes care of retrying; just make sure the retry is a full snapshot
+                    if (zmqSeq.active && epoch == zmqSeq.epoch)
+                        zmqSeqInvalidate("mempool synch failed", false);
+                });
+            }
+            sm->state = State::SynchingMempool;
+        }
     } else if (sm->state == State::SynchDSPs) {
         auto task = newTask<SynchDSPsTask>(false, this, storage, masterNotifySubsFlag);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
@@ -1422,6 +1513,8 @@ void Controller::on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotif
         case HashTx:
             sm->mostRecentZmqHashTxNotif = std::move(hash);
             break;
+        case Sequence:
+            break; // not used: "sequence" notifications are handled by zmqSeqOnMessage()
         }
     }
 }
@@ -1765,6 +1858,8 @@ auto Controller::stats() const -> Stats
                 QVariantMap m3;
                 m3["address"] = state.lastKnownAddr;
                 m3["notifications"] = static_cast<qulonglong>(state.notifCt);
+                if (topic.tag == ZmqTopic::Tag::Sequence)
+                    m3["mempool mirror"] = zmqSeqStats();
                 m2[topic.str()] = m3;
             }
         }
@@ -1914,6 +2009,12 @@ void Controller::zmqTopicStart(ZmqTopic t)
             Warning() << "zmqNotifier \"" << t.str() << "\": " << errMsg;
         });
         conns += connect(state.notifier.get(), &ZmqSubNotifier::gotMessage, this, [this, t](const QString &topic, const QByteArrayList &parts) {
+            if (t.tag == ZmqTopic::Tag::Sequence) {
+                if (auto *state = zmqs.find(t)) [[likely]]
+                    ++state->notifCt;
+                zmqSeqOnMessage(parts);
+                return;
+            }
             std::optional<std::pair<ZmqTopic, QByteArray>> optPair;
             if (Debug::isEnabled()) {
                 Debug d;
@@ -1950,6 +2051,8 @@ void Controller::zmqTopicStart(ZmqTopic t)
     }
     if (state.notifier->isRunning())
         state.notifier->stop();
+    if (t.tag == ZmqTopic::Tag::Sequence)
+        zmqSeqReset(false); // messages may be lost across a restart
     if (state.lastKnownAddr.isEmpty()) {
         DebugM(__func__, ": zmq ", t.str(), " address is empty, ignoring start request");
         return;
@@ -1960,6 +2063,8 @@ void Controller::zmqTopicStart(ZmqTopic t)
     }
     if (!state.notifier->start(state.lastKnownAddr, t.str(), 30 * 60 * 1000 /* idle timeout: 30 mins in msecs */)) {
         Warning() << __func__ << ": start failed";
+    } else if (t.tag == ZmqTopic::Tag::Sequence) {
+        zmqSeqReset(true);
     }
 }
 
@@ -1968,6 +2073,8 @@ void Controller::zmqTopicStop(ZmqTopic t)
     if (auto *state = zmqs.find(t); state && state->notifier && state->notifier->isRunning()) {
         state->notifier->stop();
     }
+    if (t.tag == ZmqTopic::Tag::Sequence && zmqSeq.active)
+        zmqSeqReset(false);
 }
 
 void Controller::zmqStartAllKnown()
@@ -1988,11 +2095,191 @@ void Controller::zmqStopAll(bool cleanup)
     }
 }
 
+void Controller::zmqSeqReset(const bool active)
+{
+    zmqSeq.active = active;
+    zmqSeq.lastMsgCounter.reset();
+    zmqSeq.lastEventSeq.reset();
+    // Note: no prompt resynch here. Until the first message arrives we cannot be sure that our subscription has taken
+    // effect (see zmqSeqOnSynchSuccess), so the first message is what triggers it.
+    zmqSeqInvalidate(active ? "notifier (re)started" : "notifier stopped", false);
+    zmqSeq.resynchRequested = false;
+}
+
+void Controller::zmqSeqInvalidate(const QString &reason, const bool resynchSoon)
+{
+    ++zmqSeq.epoch;
+    // Events received so far all predate any snapshot we will request from now on, so they can be discarded.
+    zmqSeq.pending.clear();
+    if (zmqSeq.baselineValid) {
+        ++zmqSeq.nInvalidations;
+        DebugM("zmq sequence: mempool mirror invalidated (", reason, "), the next mempool synch will be a full snapshot");
+    }
+    zmqSeq.baselineValid = false;
+    zmqSeq.lastInvalidationReason = reason;
+    if (resynchSoon && zmqSeq.active) {
+        zmqSeq.resynchRequested = true;
+        if (Util::getTimeSecs() - zmqSeq.lastResynchTime >= kZmqSeqMinSecsBetweenResynchs)
+            zmqSeqScheduleSynch();
+    }
+}
+
+void Controller::zmqSeqScheduleSynch()
+{
+    // Same condition as for "hashtx" notifications in on_Poll(): only kick off a new cycle ourselves if we are idle and
+    // in the regular polling mode (the latter also coalesces bursts of events into a single scheduled cycle).
+    if (!sm && timerInterval(pollTimerName) == polltimeMS)
+        callOnTimerSoonNoRepeat(0, pollTimerName, [this]{ on_Poll(); }, true);
+}
+
+bool Controller::zmqSeqWantsImmediateSynch() const
+{
+    if (!zmqSeq.active)
+        return false;
+    if (zmqSeq.baselineValid && !zmqSeq.pending.empty())
+        return true; // events arrived meanwhile; applying them is cheap (no getrawmempool)
+    return zmqSeq.resynchRequested && Util::getTimeSecs() - zmqSeq.lastResynchTime >= kZmqSeqMinSecsBetweenResynchs;
+}
+
+void Controller::zmqSeqOnMessage(const QByteArrayList &parts)
+{
+    using Label = ZmqSequence::Msg::Label;
+    if (!zmqSeq.active) [[unlikely]]
+        return; // stale message from a notifier that was since stopped
+    const auto optMsg = parts.size() >= 2 ? ZmqSequence::parseBody(parts[1]) : std::nullopt;
+    const auto optCounter = parts.size() >= 3 ? ZmqSequence::parseMsgCounter(parts[2]) : std::nullopt;
+    if (!optMsg || !optCounter) [[unlikely]] {
+        Warning() << "Got a malformed zmq \"sequence\" notification (" << parts.size() << " parts), will resynch the mempool";
+        zmqSeq.lastMsgCounter.reset(); // cannot check continuity against this message
+        zmqSeqInvalidate("malformed message", true);
+        return;
+    }
+    const auto & msg = *optMsg;
+    const bool firstMsg = !zmqSeq.lastMsgCounter.has_value();
+    if (!firstMsg && !ZmqSequence::isNextMsgCounter(*zmqSeq.lastMsgCounter, *optCounter)) {
+        // The counter increments by exactly one per message published on this topic, so messages were lost (e.g.
+        // at the ZMQ high water mark), or bitcoind restarted. Either way, we can no longer trust the mirror.
+        ++zmqSeq.nMsgGaps;
+        DebugM("zmq sequence: message counter jumped from ", *zmqSeq.lastMsgCounter, " to ", *optCounter);
+        zmqSeqInvalidate("lost messages", true);
+    }
+    zmqSeq.lastMsgCounter = *optCounter;
+    if (Trace::isEnabled())
+        Trace() << "zmq sequence: " << static_cast<char>(msg.label) << " " << QString(Util::ToHexFast(msg.hash))
+                << (msg.mempoolSeq ? QString(" mempool_sequence: %1").arg(*msg.mempoolSeq) : QString())
+                << " (msg #" << *optCounter << ")";
+
+    if (!msg.isTx()) {
+        // Block connected/disconnected. Txs that leave the mempool by being mined are not published as "R" (and a reorg
+        // reshuffles the mempool), so let the block processing code run, followed by a full snapshot.
+        zmqSeqInvalidate(msg.label == Label::BlockConnected ? "block connected" : "block disconnected", false);
+        zmqSeq.resynchRequested = true;
+        if (!sm)
+            process(true); // update right away, like for a "hashblock" notification
+        return;
+    }
+
+    const uint64_t mempoolSeq = *msg.mempoolSeq;
+    if (zmqSeq.lastEventSeq && mempoolSeq <= *zmqSeq.lastEventSeq) [[unlikely]] {
+        DebugM("zmq sequence: mempool sequence went backwards: ", *zmqSeq.lastEventSeq, " -> ", mempoolSeq);
+        zmqSeqInvalidate("mempool sequence went backwards", true);
+    }
+    zmqSeq.lastEventSeq = mempoolSeq;
+    if (zmqSeq.pending.size() >= kZmqSeqMaxPendingEvents) [[unlikely]] {
+        Warning() << "zmq sequence: " << zmqSeq.pending.size() << " mempool events are pending, will resynch the mempool";
+        zmqSeqInvalidate("too many pending events", true);
+    }
+    zmqSeq.pending.push_back({msg.hash, mempoolSeq, msg.label == Label::TxAdded});
+    if (zmqSeq.baselineValid) {
+        zmqSeqScheduleSynch(); // apply the event now if we are idle (else as soon as the current cycle ends)
+    } else if (firstMsg) {
+        // Our subscription is now known to be live, so a snapshot requested from now on can serve as the baseline
+        zmqSeq.resynchRequested = true;
+        zmqSeqScheduleSynch();
+    }
+}
+
+void Controller::zmqSeqOnSynchSuccess(const SynchMempoolTask &task, const ZmqSeqPlan &sp)
+{
+    if (!zmqSeq.active || sp.epoch != zmqSeq.epoch)
+        return; // invalidated while this synch was in flight, so its result cannot serve as (or advance) a baseline
+    const auto prunePending = [this](const uint64_t below) {
+        std::erase_if(zmqSeq.pending, [below](const ZmqSequence::Event &e) { return e.mempoolSeq < below; });
+    };
+    if (task.snapshotMempoolSeq) {
+        // A SnapshotWithSeq was processed (possibly as the fallback of a delta that had to redo)
+        const uint64_t snapSeq = *task.snapshotMempoolSeq;
+        if (sp.verify && task.nRedos() == 0) {
+            // Only meaningful if we have received every event below the snapshot's mempool sequence number. Since the
+            // epoch did not change, no messages were lost and no block arrived, so that is the case iff the last
+            // event received is at least the one just below it.
+            if (zmqSeq.lastEventSeq && *zmqSeq.lastEventSeq + 1u >= snapSeq) {
+                const auto n = ZmqSequence::countUnexplained(task.snapshotAppeared, task.snapshotVanished,
+                                                             zmqSeq.pending, sp.fromSeq, snapSeq);
+                ++zmqSeq.nVerifications;
+                zmqSeq.nUnexplainedDiffs += n;
+                if (n)
+                    DebugM("zmq sequence: periodic snapshot found ", n, " mempool difference(s) not explained by zmq"
+                           " events; the mirror had drifted and has now been corrected");
+                else
+                    DebugM("zmq sequence: periodic snapshot agrees with the incremental mempool mirror");
+            } else
+                DebugM("zmq sequence: periodic snapshot not verified against the mirror (events still in flight)");
+        }
+        ++zmqSeq.nFullSynchs;
+        zmqSeq.lastFullSynchTime = Util::getTimeSecs();
+        prunePending(snapSeq);
+        if (!sp.subscriptionLive) {
+            // We had not yet received any message on the topic when this snapshot was requested. ZMQ silently drops
+            // messages published before a new subscription takes effect (without a gap in the message counter), so
+            // events that happened after the snapshot may have been missed. Wait for the first message.
+            DebugM("zmq sequence: not using this snapshot as a baseline (no message received yet)");
+            return;
+        }
+        if (!zmqSeq.baselineValid)
+            DebugM("zmq sequence: mempool mirror established at mempool sequence ", snapSeq);
+        zmqSeq.baselineValid = true;
+        zmqSeq.nextMempoolSeq = snapSeq;
+        zmqSeq.baselineTipHash = sp.tipHash;
+        zmqSeq.resynchRequested = false;
+    } else if (sp.isDelta) {
+        if (task.deltaAnomalies || task.nFailedDownloads()) {
+            // Either our mirror disagreed with the event stream, or a tx left the bitcoind mempool before we could
+            // fetch it. The latter is normally harmless (its "R" follows), but we never guess: resynch.
+            zmqSeqInvalidate(QString("delta synch: %1 anomalies, %2 failed downloads")
+                                 .arg(task.deltaAnomalies).arg(task.nFailedDownloads()), true);
+            return;
+        }
+        ++zmqSeq.nDeltaSynchs;
+        zmqSeq.nEventsApplied += sp.nEvents;
+        zmqSeq.nextMempoolSeq = sp.deltaNextSeq;
+        prunePending(sp.deltaNextSeq);
+    }
+}
+
+QVariantMap Controller::zmqSeqStats() const
+{
+    QVariantMap m;
+    m["baseline valid"] = zmqSeq.baselineValid;
+    m["next mempool sequence"] = zmqSeq.baselineValid ? QVariant(qulonglong(zmqSeq.nextMempoolSeq)) : QVariant();
+    m["pending events"] = qulonglong(zmqSeq.pending.size());
+    m["full synchs"] = qulonglong(zmqSeq.nFullSynchs);
+    m["delta synchs"] = qulonglong(zmqSeq.nDeltaSynchs);
+    m["events applied"] = qulonglong(zmqSeq.nEventsApplied);
+    m["invalidations"] = qulonglong(zmqSeq.nInvalidations);
+    m["message gaps"] = qulonglong(zmqSeq.nMsgGaps);
+    m["verifications"] = qulonglong(zmqSeq.nVerifications);
+    m["unexplained differences"] = qulonglong(zmqSeq.nUnexplainedDiffs);
+    m["last invalidation reason"] = zmqSeq.lastInvalidationReason;
+    return m;
+}
+
 const char *Controller::ZmqPvt::Topic::str() const noexcept
 {
     switch (tag) {
     case HashBlock: return "hashblock";
     case HashTx: return "hashtx";
+    case Sequence: return "sequence";
     }
     return "unknown";
 }

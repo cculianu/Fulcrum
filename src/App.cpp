@@ -1609,6 +1609,30 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [val]{ DebugM("config: zmq_allow_hashtx = ", val); });
     }
 
+    // conf: zmq_allow_sequence
+    if (conf.hasValue("zmq_allow_sequence")) {
+        bool ok{};
+        const bool val = conf.boolValue("zmq_allow_sequence", Options::defaultZmqAllowSequence, &ok);
+        if (!ok)
+            throw BadArgs("zmq_allow_sequence: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        options->zmqAllowSequence = val;
+        Util::AsyncOnObject(this, [val]{ DebugM("config: zmq_allow_sequence = ", val); });
+    }
+
+    // conf: zmq_sequence_resynch_interval
+    if (conf.hasValue("zmq_sequence_resynch_interval")) {
+        constexpr auto confKey = "zmq_sequence_resynch_interval";
+        bool ok{};
+        const int val = conf.intValue(confKey, -1, &ok);
+        if (!ok || (val != 0 && (val < int(Options::minZmqSequenceResynchIntervalSecs)
+                                 || val > int(Options::maxZmqSequenceResynchIntervalSecs))))
+            throw BadArgs(QString("%1: bad value. Specify 0 to disable, or a number of seconds in the range [%2, %3]")
+                              .arg(confKey).arg(Options::minZmqSequenceResynchIntervalSecs)
+                              .arg(Options::maxZmqSequenceResynchIntervalSecs));
+        options->zmqSequenceResynchIntervalSecs = unsigned(val);
+        Util::AsyncOnObject(this, [val, confKey]{ DebugM("config: ", confKey, " = ", val); });
+    }
+
     // CLI: --upnp (--no-upnp)
     // conf: upnp
     if (const bool psetYes = parser.isSet("upnp"), psetNo = parser.isSet("no-upnp"); psetYes || psetNo || conf.hasValue("upnp")) {

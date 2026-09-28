@@ -57,16 +57,19 @@ struct SynchMempoolTask::Precache {
     std::thread thread;
     std::atomic_bool didErrorOut = false;
 
-    void startThread(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
+    /// If `checkMempool` is true, a prevout whose txid is not in `tentativeMempoolTxHashes` is additionally looked up in
+    /// our (live) mempool before it is assumed to be confirmed. The Delta mode uses this so that it need not copy the
+    /// entire mempool key set for every incremental synch.
+    void startThread(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes, bool checkMempool = false);
     [[nodiscard]] bool waitUntilDone();
     void stopThread();
     void submitWork(const bitcoin::CTransactionRef &tx);
-    void threadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
+    void threadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes, bool checkMempool);
 };
 
 SynchMempoolTask::SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag,
-                                   const std::unordered_set<TxHash, HashHasher> & ignoreTxns)
-    : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
+                                   const std::unordered_set<TxHash, HashHasher> & ignoreTxns, Plan plan_)
+    : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag), plan(std::move(plan_)),
       txnIgnoreSet(ignoreTxns), isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin()),
       isCashTokens(ctl_->isBCHCoin()), precache{std::make_unique<Precache>(*this)}
 {
@@ -105,6 +108,8 @@ void SynchMempoolTask::clear() {
     expectedNumTxsDownloaded = 0;
     lastProgress = 0.;
     precache->stopThread();
+    snapshotMempoolSeq.reset();
+    snapshotAppeared.clear(); snapshotVanished.clear();
     // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
     // all the droppedTx scripthashes for each retry, so we never clear the set.
     // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
@@ -112,13 +117,14 @@ void SynchMempoolTask::clear() {
     // Note 4: we never clear txidsAffected
 }
 
-void SynchMempoolTask::Precache::startThread(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
+void SynchMempoolTask::Precache::startThread(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes,
+                                             const bool checkMempool)
 {
     stopThread();
     threadIsRunning = true;
-    thread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes)]() mutable {
+    thread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes), checkMempool]() mutable {
         Defer d([this]{ threadIsRunning = false; });
-        threadFunc(reserve, std::move(txHashes));
+        threadFunc(reserve, std::move(txHashes), checkMempool);
     });
 }
 
@@ -163,7 +169,8 @@ void SynchMempoolTask::Precache::submitWork(const bitcoin::CTransactionRef &tx)
     cond.notify_one();
 }
 
-void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes)
+void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes,
+                                            const bool checkMempool)
 {
     Util::ThreadName::Set("SyncMempoolPreCache");
     static auto constexpr funcName = "SynchMempoolTask::Precache::threadFunc";
@@ -195,7 +202,10 @@ void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool:
             for (const auto & in : tx->vin) {
                 const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
                 ++tot;
-                if (tentativeMempoolTxHashes.contains(txo.txHash))
+                // Note: taking the mempool lock (shared) here is fine. Only the SynchMempoolTask modifies the mempool,
+                // and it does not do so while this thread runs (processResults() joins us before locking exclusively).
+                if (tentativeMempoolTxHashes.contains(txo.txHash)
+                        || (checkMempool && parent.storage->mempool().first.txs.contains(txo.txHash)))
                     continue; // unconfirmed spend, we don't pre-cache this, continue
                 // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
                 // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
@@ -244,6 +254,14 @@ void SynchMempoolTask::updateLastProgress(std::optional<double> val)
 void SynchMempoolTask::redoFromStart()
 {
     clear();
+    if (plan.mode == Mode::Delta) {
+        // Part of the delta may already have been applied, so it cannot simply be applied again. Take a full snapshot
+        // instead. Since it carries the mempool sequence number, the Controller can re-establish its baseline from it.
+        DebugM(objectName(), ": redo requested while applying a ZMQ sequence delta, falling back to a full snapshot");
+        plan.mode = Mode::SnapshotWithSeq;
+        plan.adds.clear(); plan.drops.clear();
+        plan.recordDiff = false;
+    }
     if (++redoCt > kRedoCtMax) {
         Error() << "SyncMempoolTask redo count exceeded (" << redoCt << "), aborting task (elapsed: " <<  elapsed.secsStr() << " secs)";
         emit errored();
@@ -258,7 +276,10 @@ void SynchMempoolTask::process()
         return; // short-circuit early return if controller is stopping
     if (state == State::Start) {
         state = State::AwaitingGrmp;
-        doGetRawMempool();
+        if (plan.mode == Mode::Delta)
+            applyDelta();
+        else
+            doGetRawMempool();
     } else if (state == State::DlTxs) {
         updateLastProgress();
         if (!txsNeedingDownload.empty())
@@ -293,109 +314,206 @@ void SynchMempoolTask::doGetRawMempool()
     /// most efficient.  With full mempools bitcoind CPU usage could spike to 100% if we use the verbose mode.
     /// It turns out we don't need that verbose data anyway (such as a full ancestor count) -- it's enough to have a bool
     /// flag for "has unconfirmed parent tx", and be done with it.  Everything else we can calculate.
-    submitRequest("getrawmempool", {false}, [this, t0 = Tic()](const RPC::Message & resp) mutable {
+    ///
+    /// In SnapshotWithSeq mode we also pass mempool_sequence=true (Bitcoin Core >= 0.21), in which case the reply is an
+    /// object of the form {"txids": [...], "mempool_sequence": N}, where N is the mempool sequence number that the next
+    /// mempool event will be assigned (see ZmqSequence.h).
+    const bool withSeq = plan.mode == Mode::SnapshotWithSeq;
+    submitRequest("getrawmempool", withSeq ? QVariantList{false, true} : QVariantList{false},
+                  [this, withSeq, t0 = Tic()](const RPC::Message & resp) mutable {
         t0.fin();
-        const Tic t1;
-        std::size_t newCt = 0, droppedCt = 0, ignoredCt = 0;
-        const QVariantList txidList = resp.result().toList();
-        Mempool::TxHashSet droppedTxs, tentativeMempoolTxHashesForPrecacher;
-        {
-            // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
-            // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
-            // invariants will hold even if we release the lock early, regardless.
-            auto [mempool, lock] = storage->mempool();
-            droppedTxs = tentativeMempoolTxHashesForPrecacher = Util::keySet<Mempool::TxHashSet>(mempool.txs);
+        if (!withSeq) {
+            processSnapshot(resp.result().toList(), std::nullopt, resp.method, t0);
+            return;
         }
-        for (const auto & var : txidList) {
-            const auto txidHex = var.toString().trimmed().toLower();
-            const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
-            if (hash.length() != HashLen) {
-                Error() << resp.method << ": got an invalid tx hash: " << txidHex;
-                emit errored();
-                return;
-            }
-            if (auto it = droppedTxs.find(hash); it != droppedTxs.end()) {
-                droppedTxs.erase(it); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
-                if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
-            } else {
-                if (txnIgnoreSet.contains(hash)) {
-                    // suppressed txn (in ignore set)
-                    if (TRACE) Debug() << "Ignored mempool tx: " << hash.toHex();
-                    ++ignoredCt;
-                } else {
-                    // new txn
-                    if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
-                    tentativeMempoolTxHashesForPrecacher.emplace(hash);
-                    ++newCt;
-                    const auto & [it2, inserted] = txsNeedingDownload.try_emplace(hash, std::make_shared<Mempool::Tx>());
-                    Mempool::TxRef & tx = it2->second;
-                    if (!inserted) [[unlikely]] {
-                        // this should never happen
-                        Error() << "FIXME: Error inserting tx into txsNeedingDownload map, already there! TxId: " << hash.toHex();
-                        assert(bool(tx));
-                    }
-                    tx->hashXs.max_load_factor(.9); // hopefully this will save some memory by expicitly setting max table size to 90%
-                    tx->hash = hash;
-                }
-            }
+        const QVariantMap m = resp.result().toMap();
+        const QVariant txids = m.value("txids"), seq = m.value("mempool_sequence");
+        bool ok = false;
+        const qulonglong mempoolSeq = seq.toULongLong(&ok);
+        if (!ok || !txids.canConvert<QVariantList>()) {
+            Error() << resp.method << ": unexpected reply format (expected an object with \"txids\" and"
+                    << " \"mempool_sequence\" keys)";
+            emit errored();
+            return;
         }
-        if (!droppedTxs.empty()) {
-            const auto expectedDropCt = droppedTxs.size();
-            // Some txs were dropped, update mempool with the drops, grabbing the lock exclusively.
-            // Note the release and re-acquisition of the lock should be ok since this Controller
-            // thread is the only thread that ever modifies the mempool, so a coherent view of the
-            // mempool is the case here even after having released and re-acquired the lock.
-            Mempool::ScriptHashesAffectedSet affected; affected.reserve(32);
-            Mempool::Stats res;
-            // exclusively-locked scope, do minimal work here
-            {
-                auto [mempool, lock] = storage->mutableMempool();
-                res = mempool.dropTxs(affected, droppedTxs, TRACE);
-            } // release lock
-
-            // update this set too for txSubsMgr
-            txidsAffected.insert(droppedTxs.begin(), droppedTxs.end());
-
-            // do bookkeeping, maybe print debug log
-            {
-                droppedCt = res.oldSize - res.newSize;
-                if (Debug::isEnabled()) {
-                    Debug d;
-                    d << "Dropped " << droppedCt << " txs from mempool (" << affected.size() << " addresses) in "
-                      << QString::number(res.elapsedMsec, 'f', 3) << " msec, new mempool size: " << res.newSize
-                      << " (" << res.newNumAddresses << " addresses)";
-                    if (res.dspRmCt || res.dspTxRmCt)
-                        d << " (also dropped dsps: " << res.dspRmCt << " dspTxs: " << res.dspTxRmCt << ")";
-                    if (res.rpaRmCt)
-                        d << " (also removed rpa entries: " << res.rpaRmCt << ")";
-                }
-                scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
-                dspTxsAffected.merge(std::move(res.dspTxsAffected)); /* also update this */
-                // . <--- NB: at this point: affected and res.dspsTxsAffected are moved-from
-            }
-            if (droppedCt != expectedDropCt) [[unlikely]] { // This invariant is checked to detect bugs.
-                Warning() << "Synch mempool expected to drop " << expectedDropCt << ", but in fact dropped "
-                          << droppedCt << " -- retrying getrawmempool";
-                redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
-                return;
-            }
-        }
-
-        if (newCt || droppedCt)
-            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", ignoredCt, " ignored, ",
-                   droppedCt, " dropped, ", newCt, " new",
-                   " (reply took: ", t0.msecStr(), " msec, processing took: ", t1.msecStr(), " msec)");
-        expectedNumTxsDownloaded = unsigned(newCt);
-        txsDownloaded.reserve(expectedNumTxsDownloaded);
-        txsWaitingForResponse.reserve(expectedNumTxsDownloaded);
-
-        // TX data will be downloaded now, if needed
-        state = State::DlTxs;
-        if (expectedNumTxsDownloaded) {
-            precache->startThread(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher));
-        }
-        process();
+        processSnapshot(txids.toList(), uint64_t{mempoolSeq}, resp.method, t0);
     });
+}
+
+void SynchMempoolTask::processSnapshot(const QVariantList &txidList, const std::optional<uint64_t> mempoolSeq,
+                                       const QString &method, const Tic &tReply)
+{
+    const Tic t1;
+    std::size_t newCt = 0, droppedCt = 0, ignoredCt = 0;
+    Mempool::TxHashSet droppedTxs, tentativeMempoolTxHashesForPrecacher;
+    {
+        // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
+        // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
+        // invariants will hold even if we release the lock early, regardless.
+        auto [mempool, lock] = storage->mempool();
+        droppedTxs = tentativeMempoolTxHashesForPrecacher = Util::keySet<Mempool::TxHashSet>(mempool.txs);
+    }
+    for (const auto & var : txidList) {
+        const auto txidHex = var.toString().trimmed().toLower();
+        const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
+        if (hash.length() != HashLen) {
+            Error() << method << ": got an invalid tx hash: " << txidHex;
+            emit errored();
+            return;
+        }
+        if (auto it = droppedTxs.find(hash); it != droppedTxs.end()) {
+            droppedTxs.erase(it); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
+            if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
+        } else {
+            if (txnIgnoreSet.contains(hash)) {
+                // suppressed txn (in ignore set)
+                if (TRACE) Debug() << "Ignored mempool tx: " << hash.toHex();
+                ++ignoredCt;
+            } else {
+                // new txn
+                if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
+                tentativeMempoolTxHashesForPrecacher.emplace(hash);
+                ++newCt;
+                queueNewTx(hash);
+                if (plan.recordDiff) snapshotAppeared.insert(hash);
+            }
+        }
+    }
+    if (plan.recordDiff) snapshotVanished = droppedTxs; // record before dropTxsFromMempool() adds descendants to the set
+    if (!droppedTxs.empty()) {
+        const auto optDroppedCt = dropTxsFromMempool(droppedTxs, true);
+        if (!optDroppedCt) return; // a redo was scheduled
+        droppedCt = *optDroppedCt;
+    }
+
+    if (newCt || droppedCt)
+        DebugM(method, ": got reply with ", txidList.size(), " items, ", ignoredCt, " ignored, ",
+               droppedCt, " dropped, ", newCt, " new",
+               " (reply took: ", tReply.msecStr(), " msec, processing took: ", t1.msecStr(), " msec)");
+    snapshotMempoolSeq = mempoolSeq;
+    beginDownloads(newCt, std::move(tentativeMempoolTxHashesForPrecacher), false);
+}
+
+void SynchMempoolTask::applyDelta()
+{
+    const Tic t0;
+    std::size_t droppedCt = 0, ignoredCt = 0;
+    Mempool::TxHashSet droppedTxs, newTxs;
+    {
+        // A shared lock is enough here, since we are the only subsystem that ever modifies the mempool (see
+        // processSnapshot()).
+        auto [mempool, lock] = storage->mempool();
+        for (const auto & hash : plan.drops)
+            if (mempool.txs.contains(hash))
+                droppedTxs.insert(hash);
+        for (const auto & hash : plan.adds) {
+            if (txnIgnoreSet.contains(hash)) {
+                ++ignoredCt;
+                continue;
+            }
+            if (mempool.txs.contains(hash) && !droppedTxs.contains(hash)) {
+                // An "A" for a tx we already have, with no "R" in between: our mirror and the event stream disagree.
+                // Skip it (addNewTxs() only accepts new txs) and flag it so that the Controller resynchs.
+                ++deltaAnomalies;
+                if (TRACE) Debug() << "Delta: added tx is already in mempool: " << hash.toHex();
+                continue;
+            }
+            newTxs.insert(hash);
+        }
+    }
+    // Note: a tx that is both dropped and added (removed, then re-added) is refetched after the drop below.
+    for (const auto & hash : newTxs)
+        queueNewTx(hash);
+    if (!droppedTxs.empty()) {
+        // Unlike for a snapshot, the drop count may exceed the requested count: dropTxs() also removes in-mempool
+        // descendants, whose own "R" events may simply not have arrived yet.
+        const auto optDroppedCt = dropTxsFromMempool(droppedTxs, false);
+        if (!optDroppedCt) return; // a redo was scheduled (it will be a full snapshot, see redoFromStart())
+        droppedCt = *optDroppedCt;
+    }
+    if (!newTxs.empty() || droppedCt || deltaAnomalies)
+        DebugM("ZMQ sequence delta: ", plan.adds.size(), " added, ", plan.drops.size(), " removed -> ",
+               newTxs.size(), " new, ", droppedCt, " dropped, ", ignoredCt, " ignored, ", deltaAnomalies,
+               " anomalies (processing took: ", t0.msecStr(), " msec)");
+    // Only the new txs are "tentative" mempool txs for the precacher; parents already in the mempool are looked up live.
+    const auto newCt = newTxs.size();
+    beginDownloads(newCt, std::move(newTxs), true);
+}
+
+void SynchMempoolTask::queueNewTx(const TxHash &hash)
+{
+    const auto & [it, inserted] = txsNeedingDownload.try_emplace(hash, std::make_shared<Mempool::Tx>());
+    Mempool::TxRef & tx = it->second;
+    if (!inserted) [[unlikely]] {
+        // this should never happen
+        Error() << "FIXME: Error inserting tx into txsNeedingDownload map, already there! TxId: " << hash.toHex();
+        assert(bool(tx));
+    }
+    tx->hashXs.max_load_factor(.9); // hopefully this will save some memory by expicitly setting max table size to 90%
+    tx->hash = hash;
+}
+
+std::optional<std::size_t> SynchMempoolTask::dropTxsFromMempool(Mempool::TxHashSet &droppedTxs, const bool exactCount)
+{
+    const auto expectedDropCt = droppedTxs.size();
+    // Some txs were dropped, update mempool with the drops, grabbing the lock exclusively.
+    // Note the release and re-acquisition of the lock should be ok since this Controller
+    // thread is the only thread that ever modifies the mempool, so a coherent view of the
+    // mempool is the case here even after having released and re-acquired the lock.
+    Mempool::ScriptHashesAffectedSet affected; affected.reserve(32);
+    Mempool::Stats res;
+    // exclusively-locked scope, do minimal work here
+    {
+        auto [mempool, lock] = storage->mutableMempool();
+        res = mempool.dropTxs(affected, droppedTxs, TRACE);
+    } // release lock
+
+    // update this set too for txSubsMgr
+    txidsAffected.insert(droppedTxs.begin(), droppedTxs.end());
+
+    // do bookkeeping, maybe print debug log
+    const std::size_t droppedCt = res.oldSize - res.newSize;
+    {
+        if (Debug::isEnabled()) {
+            Debug d;
+            d << "Dropped " << droppedCt << " txs from mempool (" << affected.size() << " addresses) in "
+              << QString::number(res.elapsedMsec, 'f', 3) << " msec, new mempool size: " << res.newSize
+              << " (" << res.newNumAddresses << " addresses)";
+            if (res.dspRmCt || res.dspTxRmCt)
+                d << " (also dropped dsps: " << res.dspRmCt << " dspTxs: " << res.dspTxRmCt << ")";
+            if (res.rpaRmCt)
+                d << " (also removed rpa entries: " << res.rpaRmCt << ")";
+        }
+        scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
+        dspTxsAffected.merge(std::move(res.dspTxsAffected)); /* also update this */
+        // . <--- NB: at this point: affected and res.dspsTxsAffected are moved-from
+    }
+    // This invariant is checked to detect bugs. For a snapshot the counts must match exactly (bitcoind never keeps a
+    // descendant of a tx it removed, so such descendants are always in `droppedTxs` already). For a delta, dropping
+    // more than requested is expected (see applyDelta()), but dropping fewer is not.
+    if (droppedCt != expectedDropCt && (exactCount || droppedCt < expectedDropCt)) [[unlikely]] {
+        Warning() << "Synch mempool expected to drop " << expectedDropCt << ", but in fact dropped "
+                  << droppedCt << " -- retrying getrawmempool";
+        redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
+        return std::nullopt;
+    }
+    return droppedCt;
+}
+
+void SynchMempoolTask::beginDownloads(const size_t newCt, Mempool::TxHashSet tentativeMempoolTxHashesForPrecacher,
+                                      const bool precacheChecksMempool)
+{
+    expectedNumTxsDownloaded = unsigned(newCt);
+    txsDownloaded.reserve(expectedNumTxsDownloaded);
+    txsWaitingForResponse.reserve(expectedNumTxsDownloaded);
+
+    // TX data will be downloaded now, if needed
+    state = State::DlTxs;
+    if (expectedNumTxsDownloaded) {
+        precache->startThread(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher),
+                              precacheChecksMempool);
+    }
+    process();
 }
 
 void SynchMempoolTask::doDLNextTx()

@@ -25,6 +25,7 @@
 #include "Options.h"
 #include "Storage.h"
 #include "SrvMgr.h"
+#include "ZmqSequence.h"
 
 #include <atomic>
 #include <concepts> // for std::derived_from
@@ -40,6 +41,7 @@
 
 class CtlTask;
 class SSLCertMonitor;
+struct SynchMempoolTask;
 class ZmqSubNotifier;
 
 class Controller : public Mgr, public ThreadObjectMixin, public TimersByNameMixin, public ProcessAgainMixin
@@ -221,17 +223,19 @@ private:
     /// If --dump-sh was specified on CLI, this will execute at startup() time right after storage has been loaded. May throw.
     void dumpScriptHashes(const QString &fileName);
 
-    /// Stores ZMQ notification state for "hashblock" and "hashtx" ZMQ topics from remote bitcoind.
+    /// Stores ZMQ notification state for "hashblock", "hashtx", and "sequence" ZMQ topics from remote bitcoind.
     struct ZmqPvt {
         struct Topic {
-            enum class Tag : uint8_t { HashBlock, HashTx };
+            enum class Tag : uint8_t { HashBlock, HashTx, Sequence };
             const Tag tag;
-            // returns: "hashblock" or "hashtx"
+            // returns: "hashblock", "hashtx", or "sequence"
             const char *str() const noexcept;
             constexpr auto operator<=>(const Topic &) const noexcept = default;
         };
         using enum Topic::Tag;
-        static constexpr const Topic allTopics[] = { {HashBlock}, {HashTx}  /* very spammy, disabled unless zmq_allow_hashtx = true in config */ };
+        static constexpr const Topic allTopics[] = { {HashBlock},
+                                                     {HashTx}  /* very spammy, disabled unless zmq_allow_hashtx = true in config */,
+                                                     {Sequence} /* disabled unless zmq_allow_sequence = true in config */ };
         static constexpr size_t nTopics() noexcept { return std::size(allTopics); }
         struct TopicHasher {
             std::hash<int> hasher;
@@ -281,6 +285,55 @@ private:
     /// Stops all notifiers that are running. If cleanup==true also deletes all notifier instances.
     void zmqStopAll(bool cleanup = false);
 
+    /// State for mirroring the bitcoind mempool incrementally via the ZMQ "sequence" topic (see ZmqSequence.h), which
+    /// avoids a full `getrawmempool` for every mempool synch. Only used if `zmq_allow_sequence = true` in the config
+    /// and bitcoind advertises a `pubsequence` endpoint. Only ever accessed from this object's thread.
+    struct ZmqSeqState {
+        bool active = false; ///< true while the "sequence" notifier is running
+        /// True iff our mempool reflects every bitcoind mempool event < nextMempoolSeq, on top of the chain tip
+        /// `baselineTipHash`. While false, mempool synchs are full `getrawmempool false true` snapshots.
+        bool baselineValid = false;
+        bool resynchRequested = false; ///< latched to ask for a prompt full snapshot (lost messages, errors, etc)
+        /// Bumped on every invalidation. A synch whose plan was made under an older epoch cannot establish or advance
+        /// the baseline (something went wrong while it was in flight).
+        uint64_t epoch = 0;
+        uint64_t nextMempoolSeq = 0; ///< only meaningful if baselineValid
+        BlockHash baselineTipHash; ///< only meaningful if baselineValid
+        std::optional<uint32_t> lastMsgCounter; ///< per-topic zmq message counter of the last message (loss detection)
+        std::optional<uint64_t> lastEventSeq; ///< mempool sequence of the last "A"/"R" received (must strictly increase)
+        std::vector<ZmqSequence::Event> pending; ///< "A"/"R" events not yet applied to our mempool, in arrival order
+        double lastFullSynchTime = 0.; ///< Util::getTimeSecs() of the last successful full snapshot
+        double lastResynchTime = 0.; ///< Util::getTimeSecs() of the last snapshot planned due to resynchRequested
+        QString lastInvalidationReason;
+        // stats
+        std::size_t nFullSynchs = 0, nDeltaSynchs = 0, nEventsApplied = 0, nInvalidations = 0, nMsgGaps = 0,
+                    nVerifications = 0, nUnexplainedDiffs = 0;
+    } zmqSeq;
+    /// If this many events pile up without being applied, drop them and resynch.
+    static constexpr std::size_t kZmqSeqMaxPendingEvents = 250'000;
+    /// Minimum time between two prompt (i.e. out of the regular poll schedule) resynchs.
+    static constexpr double kZmqSeqMinSecsBetweenResynchs = 1.0;
+
+    /// Called for every message on the "sequence" topic
+    void zmqSeqOnMessage(const QByteArrayList &parts);
+    /// Called whenever the "sequence" notifier is (re)started or stopped
+    void zmqSeqReset(bool active);
+    /// Forgets the baseline and all pending events so that the next mempool synch is a full snapshot. If `resynchSoon`,
+    /// that synch is scheduled right away rather than at the next regular poll.
+    void zmqSeqInvalidate(const QString &reason, bool resynchSoon);
+    /// Schedules a synch now if we are idle in the regular polling mode (otherwise it happens when the current cycle
+    /// ends, see State::End in process()).
+    void zmqSeqScheduleSynch();
+    /// Returns true if the current process() cycle should be followed immediately by another one (State::End).
+    bool zmqSeqWantsImmediateSynch() const;
+    /// What a mempool synch was asked to do with respect to the mirror (defined in Controller.cpp)
+    struct ZmqSeqPlan;
+    /// Called when a mempool synch planned while the "sequence" notifier was active has succeeded. Establishes or
+    /// advances the baseline, or invalidates it if the synch's results cannot be trusted.
+    void zmqSeqOnSynchSuccess(const SynchMempoolTask &task, const ZmqSeqPlan &plan);
+    /// For the /stats endpoint
+    QVariantMap zmqSeqStats() const;
+
     /// Litecoin only: Ignore these txhashes from mempool (don't download them). This gets cleared each time
     /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools
     /// for that block, until a new block arrives, then is cleared again.
@@ -305,7 +358,7 @@ private:
 protected:
     /// Called from the poll timer to restart the state machine and get latest blocks and mempool (process());
     /// Also called if we received a zmq hashblock or hashtx notification (in which case it will be called with the valid
-    /// header or tx hash, already in big endian byte order).
+    /// header or tx hash, already in big endian byte order). "sequence" notifications are handled by zmqSeqOnMessage().
     void on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifOpt = std::nullopt);
 };
 

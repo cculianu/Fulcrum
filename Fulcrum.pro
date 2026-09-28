@@ -389,6 +389,7 @@ SOURCES += \
     Util.cpp \
     Version.cpp \
     WebSocket.cpp \
+    ZmqSequence.cpp \
     ZmqSubNotifier.cpp \
     register_MetaTypes.cpp
 
@@ -445,6 +446,7 @@ HEADERS += \
     VarInt.h \
     Version.h \
     WebSocket.h \
+    ZmqSequence.h \
     ZmqSubNotifier.h
 
 # Drop-in replacement for std::unordered_(map)|(set) -- used to be called "robin_hood"
@@ -460,7 +462,8 @@ contains(DEFINES, ENABLE_TESTS) {
     SOURCES += \
         tests/ByteView_tests.cpp \
         tests/Util_tests.cpp \
-        tests/VarInt_tests.cpp
+        tests/VarInt_tests.cpp \
+        tests/ZmqSequence_tests.cpp
 }
 
 # Bitcoin related sources & headers
