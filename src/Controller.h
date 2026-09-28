@@ -294,6 +294,7 @@ private:
         /// `baselineTipHash`. While false, mempool synchs are full `getrawmempool false true` snapshots.
         bool baselineValid = false;
         bool resynchRequested = false; ///< latched to ask for a prompt full snapshot (lost messages, errors, etc)
+        bool loggedActive = false; ///< whether we logged that the mirror is in use, since the notifier (re)started
         /// Bumped on every invalidation. A synch whose plan was made under an older epoch cannot establish or advance
         /// the baseline (something went wrong while it was in flight).
         uint64_t epoch = 0;
@@ -316,8 +317,9 @@ private:
 
     /// Called for every message on the "sequence" topic
     void zmqSeqOnMessage(const QByteArrayList &parts);
-    /// Called whenever the "sequence" notifier is (re)started or stopped
-    void zmqSeqReset(bool active);
+    /// Called whenever the "sequence" notifier is (re)started or stopped, or reports an error. Until the next message
+    /// arrives, mempool synchs are full snapshots (i.e. we behave as if polling).
+    void zmqSeqReset(bool active, const QString &reason);
     /// Forgets the baseline and all pending events so that the next mempool synch is a full snapshot. If `resynchSoon`,
     /// that synch is scheduled right away rather than at the next regular poll.
     void zmqSeqInvalidate(const QString &reason, bool resynchSoon);

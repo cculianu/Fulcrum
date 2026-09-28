@@ -1418,7 +1418,9 @@ void Controller::process(bool beSilentIfUpToDate)
         }
 
         if (seqPlan && seqPlan->isDelta && seqPlan->nEvents == 0u) {
-            // Nothing happened in the bitcoind mempool since our last synch, so there is nothing to do.
+            // Nothing happened in the bitcoind mempool since our last synch, so there is nothing to do. Anything still
+            // pending predates our baseline (see zmqSeqOnMessage), and must not make State::End schedule another cycle.
+            zmqSeq.pending.clear();
             sm->state = State::SynchMempoolFinished;
             AGAIN();
         } else {
@@ -2005,8 +2007,13 @@ void Controller::zmqTopicStart(ZmqTopic t)
         state.notifier = std::make_unique<ZmqSubNotifier>(this);
         state.notifier->setObjectName(QString("ZMQ Notifier (%1)").arg(t.str()));
         // connect signals
-        conns += connect(state.notifier.get(), &ZmqSubNotifier::errored, this, [t](const QString &errMsg){
+        conns += connect(state.notifier.get(), &ZmqSubNotifier::errored, this, [this, t](const QString &errMsg){
             Warning() << "zmqNotifier \"" << t.str() << "\": " << errMsg;
+            if (t.tag == ZmqTopic::Tag::Sequence && zmqSeq.active)
+                // The notifier either re-created its socket (messages may have been lost meanwhile) or its thread
+                // exited (no more messages will arrive). Either way, go back to full snapshots until a message
+                // proves that the subscription is live again.
+                zmqSeqReset(true, "notifier error");
         });
         conns += connect(state.notifier.get(), &ZmqSubNotifier::gotMessage, this, [this, t](const QString &topic, const QByteArrayList &parts) {
             if (t.tag == ZmqTopic::Tag::Sequence) {
@@ -2052,7 +2059,7 @@ void Controller::zmqTopicStart(ZmqTopic t)
     if (state.notifier->isRunning())
         state.notifier->stop();
     if (t.tag == ZmqTopic::Tag::Sequence)
-        zmqSeqReset(false); // messages may be lost across a restart
+        zmqSeqReset(false, "notifier stopped"); // messages may be lost across a restart
     if (state.lastKnownAddr.isEmpty()) {
         DebugM(__func__, ": zmq ", t.str(), " address is empty, ignoring start request");
         return;
@@ -2064,7 +2071,7 @@ void Controller::zmqTopicStart(ZmqTopic t)
     if (!state.notifier->start(state.lastKnownAddr, t.str(), 30 * 60 * 1000 /* idle timeout: 30 mins in msecs */)) {
         Warning() << __func__ << ": start failed";
     } else if (t.tag == ZmqTopic::Tag::Sequence) {
-        zmqSeqReset(true);
+        zmqSeqReset(true, "notifier (re)started");
     }
 }
 
@@ -2074,7 +2081,7 @@ void Controller::zmqTopicStop(ZmqTopic t)
         state->notifier->stop();
     }
     if (t.tag == ZmqTopic::Tag::Sequence && zmqSeq.active)
-        zmqSeqReset(false);
+        zmqSeqReset(false, "notifier stopped");
 }
 
 void Controller::zmqStartAllKnown()
@@ -2095,14 +2102,15 @@ void Controller::zmqStopAll(bool cleanup)
     }
 }
 
-void Controller::zmqSeqReset(const bool active)
+void Controller::zmqSeqReset(const bool active, const QString &reason)
 {
     zmqSeq.active = active;
+    zmqSeq.loggedActive = false;
     zmqSeq.lastMsgCounter.reset();
     zmqSeq.lastEventSeq.reset();
     // Note: no prompt resynch here. Until the first message arrives we cannot be sure that our subscription has taken
     // effect (see zmqSeqOnSynchSuccess), so the first message is what triggers it.
-    zmqSeqInvalidate(active ? "notifier (re)started" : "notifier stopped", false);
+    zmqSeqInvalidate(reason, false);
     zmqSeq.resynchRequested = false;
 }
 
@@ -2160,7 +2168,8 @@ void Controller::zmqSeqOnMessage(const QByteArrayList &parts)
         // The counter increments by exactly one per message published on this topic, so messages were lost (e.g.
         // at the ZMQ high water mark), or bitcoind restarted. Either way, we can no longer trust the mirror.
         ++zmqSeq.nMsgGaps;
-        DebugM("zmq sequence: message counter jumped from ", *zmqSeq.lastMsgCounter, " to ", *optCounter);
+        Log() << "ZMQ \"sequence\" message counter jumped from " << *zmqSeq.lastMsgCounter << " to " << *optCounter
+              << " (messages were lost), resynching the mempool";
         zmqSeqInvalidate("lost messages", true);
     }
     zmqSeq.lastMsgCounter = *optCounter;
@@ -2185,6 +2194,10 @@ void Controller::zmqSeqOnMessage(const QByteArrayList &parts)
         zmqSeqInvalidate("mempool sequence went backwards", true);
     }
     zmqSeq.lastEventSeq = mempoolSeq;
+    if (zmqSeq.baselineValid && mempoolSeq < zmqSeq.nextMempoolSeq)
+        // Already reflected in our mirror. bitcoind publishes its notifications asynchronously, so an event can arrive
+        // after a `getrawmempool` reply that already includes its effect. Such events are to be ignored.
+        return;
     if (zmqSeq.pending.size() >= kZmqSeqMaxPendingEvents) [[unlikely]] {
         Warning() << "zmq sequence: " << zmqSeq.pending.size() << " mempool events are pending, will resynch the mempool";
         zmqSeqInvalidate("too many pending events", true);
@@ -2236,8 +2249,13 @@ void Controller::zmqSeqOnSynchSuccess(const SynchMempoolTask &task, const ZmqSeq
             DebugM("zmq sequence: not using this snapshot as a baseline (no message received yet)");
             return;
         }
-        if (!zmqSeq.baselineValid)
+        if (!zmqSeq.baselineValid) {
+            if (!zmqSeq.loggedActive) {
+                zmqSeq.loggedActive = true;
+                Log() << "Mempool: synching incrementally via ZMQ \"sequence\" notifications";
+            }
             DebugM("zmq sequence: mempool mirror established at mempool sequence ", snapSeq);
+        }
         zmqSeq.baselineValid = true;
         zmqSeq.nextMempoolSeq = snapSeq;
         zmqSeq.baselineTipHash = sp.tipHash;
