@@ -223,10 +223,13 @@ namespace Merkle {
         ret.insert(ret.end(), level.begin(), level.begin() + limit);
         const auto leafstart = leafStart(l);
         const auto count = std::min(segmentLength(), l - leafstart);
-        const auto hashes = getHashes(leafstart, count);
-        const auto vec = getLevel(hashes);
-        ret.reserve(ret.size() + vec.size());
-        ret.insert(ret.end(), vec.begin(), vec.end());
+        // NB: count may be 0 in which case we skip the next section
+        if (count > 0u) {
+            const auto hashes = getHashes(leafstart, count);
+            const auto vec = getLevel(hashes);
+            ret.reserve(ret.size() + vec.size());
+            ret.insert(ret.end(), vec.begin(), vec.end());
+        }
         return ret;
     }
 
@@ -301,7 +304,29 @@ namespace {
         return workingHash;
     }
 
+    void off_by_1_error_test() {
+        static constexpr size_t chain_length = 960600;
+        auto GetHashesFunc = [](unsigned from [[maybe_unused]], unsigned count, QString *err) -> Merkle::HashVec {
+            DebugM("Got from: ", from, ", count: ", count, " from+count=", from + count, ", chain_len: ", chain_length);
+            if (from + count > chain_length) throw InternalError("Out of range! from + count > chain_length!");
+            if (err) err->clear();
+            return Merkle::HashVec(count, QByteArray(HashLen, '\0'));
+        };
+        Merkle::Cache cache(GetHashesFunc);
+        Log() << "Initializing cache of length: " << chain_length;
+        cache.initialize(Merkle::HashVec(chain_length, QByteArray(HashLen, '\0')));
+        using P = std::pair<unsigned, unsigned>;
+        for (const auto & [height, cp_height] : {P(1, 1), P(1, 960'000), P(960'000, 960'000), P(960'000, 960'510),
+                                                P(960'000, 960'511), P(960'000, 960'512), P(chain_length-2, chain_length-1)}) {
+            Log() << "Grabbing " << height << ", " << cp_height << " ...";
+            const auto ret = cache.branchAndRoot(cp_height+1, height);
+            Log() << "Returned  (len=" << ret.first.size() << ", " << ret.second.size() << ")";
+        }
+    }
+
     void test() {
+        off_by_1_error_test();
+
         Merkle::HashVec txs = {
             "5b357a2f1f18955e8fd08dc2d8443b0806cbbe6d60b29a7370844e4815ff0efb",
             "001dd1663f777a646190959122bcfd69ad6160c28bc3e99e3df65b1cb26bcc6d",
