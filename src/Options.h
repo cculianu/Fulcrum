@@ -271,6 +271,14 @@ public:
     static constexpr bool isTxHashCacheBytesInRange(unsigned n) { return n >= txHashCacheBytesMin && n <= txHashCacheBytesMax; }
     unsigned txHashCacheBytes = defaultTxHashCacheBytes;
 
+    // config: history_lookup_threads
+    /// The number of threads (counting the one serving the request) that get_history and the subscription status
+    /// computation use to look up the hashes of confirmed history items that are not in the txhash cache. Each such
+    /// lookup is a random read, so a large cold history is otherwise read one item at a time. 1 = serial lookups.
+    static constexpr unsigned defaultHistoryLookupThreads = 8, historyLookupThreadsMin = 1, historyLookupThreadsMax = 64;
+    static constexpr bool isHistoryLookupThreadsInRange(int64_t n) { return n >= historyLookupThreadsMin && n <= historyLookupThreadsMax; }
+    unsigned historyLookupThreads = defaultHistoryLookupThreads;
+
     // CLI: --compact-dbs
     /// If specified, we compact all of the databases on startup
     bool compactDBs = false;
