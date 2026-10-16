@@ -1154,6 +1154,13 @@ namespace {
             } while (!idle.compare_exchange_weak(cur, cur - take));
             return size_t(take);
         }
+
+        /// Private on purpose: every job must come from a reservation made by reserveIdle(), or the queue bound and
+        /// the idle count no longer hold.
+        void post(std::function<void()> job) {
+            { std::lock_guard g(mut); jobs.push_back(std::move(job)); }
+            cond.notify_one();
+        }
     public:
         explicit LookupPool(unsigned nThreads, ptrdiff_t slack_ = 0) : slack(std::max<ptrdiff_t>(0, slack_)) {
             threads.reserve(nThreads);
@@ -1179,10 +1186,6 @@ namespace {
             for (auto & t : threads) t.join();
         }
         size_t size() const { return threads.size(); }
-        void post(std::function<void()> job) {
-            { std::lock_guard g(mut); jobs.push_back(std::move(job)); }
-            cond.notify_one();
-        }
 
         /// Calls fn(i) for every i in [0, n), on the calling thread and on up to n - 1 pool threads reserved via
         /// reserveIdle(), and returns once all n calls have finished. The calling thread claims items too, so this
