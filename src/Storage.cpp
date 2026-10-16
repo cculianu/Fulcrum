@@ -1138,9 +1138,24 @@ namespace {
         std::condition_variable cond;
         std::deque<std::function<void()>> jobs;
         std::vector<std::thread> threads;
+        /// Helpers waiting for work, minus jobs already queued for them. It may go down to -slack, so a request can
+        /// also post jobs for helpers that are busy now but likely to free up soon; the queue therefore never holds
+        /// more than size() + slack jobs. slack = 0: post only for helpers that are idle right now.
+        std::atomic<ptrdiff_t> idle{0};
+        const ptrdiff_t slack;
         bool stopping = false;
+
+        /// Reserve up to `want` helpers within that budget and return how many were reserved.
+        size_t reserveIdle(size_t want) {
+            ptrdiff_t cur = idle.load(), take;
+            do {
+                take = std::min<ptrdiff_t>(ptrdiff_t(want), cur + slack);
+                if (take <= 0) return 0;
+            } while (!idle.compare_exchange_weak(cur, cur - take));
+            return size_t(take);
+        }
     public:
-        explicit LookupPool(unsigned nThreads) {
+        explicit LookupPool(unsigned nThreads, ptrdiff_t slack_ = 0) : slack(std::max<ptrdiff_t>(0, slack_)) {
             threads.reserve(nThreads);
             for (unsigned i = 0; i < nThreads; ++i)
                 threads.emplace_back([this] {
@@ -1148,6 +1163,7 @@ namespace {
                         std::function<void()> job;
                         {
                             std::unique_lock g(mut);
+                            ++idle;
                             cond.wait(g, [this] { return stopping || !jobs.empty(); });
                             if (jobs.empty()) return; // stopping
                             job = std::move(jobs.front());
@@ -1168,9 +1184,10 @@ namespace {
             cond.notify_one();
         }
 
-        /// Calls fn(i) for every i in [0, n), on the calling thread and on up to n - 1 pool threads, and returns once
-        /// all n calls have finished. The calling thread claims items too, so this completes even when every pool
-        /// thread is busy with other requests. Rethrows the first exception thrown by fn, after all calls finished.
+        /// Calls fn(i) for every i in [0, n), on the calling thread and on up to n - 1 pool threads reserved via
+        /// reserveIdle(), and returns once all n calls have finished. The calling thread claims items too, so this
+        /// completes even when every pool thread is busy with other requests (with slack = 0, nothing is queued then).
+        /// Rethrows the first exception thrown by fn, after all calls finished.
         void parallelFor(size_t n, const std::function<void(size_t)> & fn) {
             struct State {
                 std::atomic<size_t> next{0}, done{0};
@@ -1187,7 +1204,7 @@ namespace {
                     if (st->done.fetch_add(1) + 1 == n) { std::lock_guard g(st->mut); st->cond.notify_all(); }
                 }
             };
-            for (size_t h = 0, nh = std::min(size(), n ? n - 1 : 0); h < nh; ++h) post(worker);
+            for (size_t h = 0, nh = reserveIdle(n ? n - 1 : 0); h < nh; ++h) post(worker);
             worker();
             std::unique_lock g(st->mut);
             st->cond.wait(g, [&] { return st->done.load() == n; });
@@ -1421,7 +1438,10 @@ Storage::Storage(const std::shared_ptr<const Options> & options_)
     setObjectName("Storage");
     _thread.setObjectName(objectName());
     if (options->historyLookupThreads > 1)
-        p->historyLookupPool = std::make_unique<LookupPool>(options->historyLookupThreads - 1);
+        // slack = the helper count: a request may also post jobs for helpers that are busy right now but likely to
+        // free up before it finishes, while the pool's queue stays bounded at twice the number of helpers.
+        p->historyLookupPool = std::make_unique<LookupPool>(options->historyLookupThreads - 1,
+                                                            ptrdiff_t(options->historyLookupThreads - 1));
 }
 
 Storage::~Storage() { Debug() << __func__; cleanup(); }
