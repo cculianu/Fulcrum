@@ -1328,7 +1328,7 @@ struct Storage::Pvt
         return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (Util::qByteArrayPvtDataSize() + HashLen+1)) );
     }
 
-    /// Cache BlockHeight -> vector of txHwiashes for the block (in bitcoind memory order -- little endian).
+    /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
     /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
     CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder; // NOTE: max size in bytes initted in constructor
     /// returns the cost for a particular cache item based on the number of hashes in the vector
