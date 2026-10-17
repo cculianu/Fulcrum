@@ -1188,6 +1188,7 @@ namespace {
                     if (st->done.fetch_add(1) + 1 == n) { std::lock_guard g(st->mut); st->cond.notify_all(); }
                 }
             };
+            bool didAddJobs = false;
             if (n > 1) {
                 // We have more than 1 `n`, push all work for n >= 2 to be done in parallel (up to `maxJobs`).
                 std::lock_guard g(mut);
@@ -1195,8 +1196,10 @@ namespace {
                     const size_t nJobsAdd = std::min(n - 1, maxJobs - jobsSz);
                     jobsSz += nJobsAdd;
                     jobs.resize(jobsSz, worker); // push nJobsAdd copies of `worker` to the end of the deque
+                    didAddJobs = true;
                 }
             }
+            if (didAddJobs) cond.notify_all(); // wake the workers with the mutex no longer held as a perf. opt (only if we did actually add new jobs)
             worker(); // do remaining work in this thread
             std::unique_lock g(st->mut);
             st->cond.wait(g, [&] { return st->done.load() >= n; });
