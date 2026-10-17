@@ -4377,18 +4377,9 @@ int64_t Storage::readUtxoCtFromDB() const
     return GenericDBGet<int64_t>(p->db, p->db.meta, kUtxoCount, true, errPrefix, false, p->db.defReadOpts).value_or(0LL);
 }
 
-
-std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const
+std::optional<TxHash> Storage::hashForTxNum_DBOnly(TxNum n, bool throwIfMissing, bool storeResultInCache) const
 {
     std::optional<TxHash> ret;
-    if (!skipCache) ret = p->lruNum2Hash.object(n);
-    if (ret.has_value()) {
-        if (wasCached) *wasCached = true;
-        ++p->lruCacheStats.num2HashHits;
-        return ret;
-    } else if (wasCached) *wasCached = false;
-    if (!skipCache) ++p->lruCacheStats.num2HashMisses;
-
     static const QString kErrMsg ("Error reading TxHash for TxNum %1: %2");
     QString errStr;
     const auto bytes = p->db.txNumsDRA->readRecord(n, &errStr);
@@ -4399,11 +4390,32 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
         Warning() << errStr;
     } else {
         ret.emplace(bytes);
+        if (storeResultInCache)
+            // save to cache
+            p->lruNum2Hash.insert(n, *ret, p->lruNum2HashSizeCalc());
     }
-    if (!skipCache && ret.has_value()) {
-        // save in cache
-        p->lruNum2Hash.insert(n, *ret, p->lruNum2HashSizeCalc());
-    }
+    return ret;
+}
+
+std::optional<TxHash> Storage::hashForTxNum_CacheOnly(TxNum n) const
+{
+    std::optional<TxHash> ret = p->lruNum2Hash.object(n);
+    if (ret.has_value()) ++p->lruCacheStats.num2HashHits;
+    else ++p->lruCacheStats.num2HashMisses;
+    return ret;
+}
+
+std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const
+{
+    std::optional<TxHash> ret;
+    if (!skipCache) ret = hashForTxNum_CacheOnly(n);
+    if (ret.has_value()) {
+        if (wasCached) *wasCached = true;
+        return ret;
+    } else if (wasCached) *wasCached = false;
+
+    ret = hashForTxNum_DBOnly(n, throwIfMissing, !skipCache);
+
     return ret;
 }
 
@@ -4567,8 +4579,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
                     else if (height < fromHeight) continue; // keep looping until we hit a height that at least "from height"
 
                     auto & item = ret.emplace_back(/* HistoryItem: */ TxHash{}, int(height));
-                    if (auto cached = p->lruNum2Hash.object(num)) {
-                        ++p->lruCacheStats.num2HashHits;
+                    if (auto cached = hashForTxNum_CacheOnly(num)) {
                         item.hash = std::move(*cached);
                     } else {
                         misses.push_back(ret.size() - 1);
@@ -4579,10 +4590,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
                 // whole chain. Read serially, a cold history waits on one read at a time, so spread large batches of
                 // misses over the lookup pool to keep several reads in flight.
                 if (!misses.empty()) {
-                    p->lruCacheStats.num2HashMisses += misses.size();
                     auto lookup = [&](size_t m) {
-                        auto hash = hashForTxNum(missNums[m], true, nullptr, /* skipCache = */ true).value(); // may throw, but that indicates some database inconsistency. we catch below
-                        p->lruNum2Hash.insert(missNums[m], hash, p->lruNum2HashSizeCalc());
+                        auto hash = hashForTxNum_DBOnly(missNums[m], true, true).value(); // may throw, but that indicates some database inconsistency. we catch below
                         ret[misses[m]].hash = std::move(hash);
                     };
                     constexpr size_t kMinMissesPerChunk = 16;

@@ -552,6 +552,11 @@ private:
     /// Writes to the RPA table. Called from addBlock()
     void addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, BlockHeight height, const BlockHash &blockHash,
                                     const QByteArray &serializedRpaPrefixTable);
+
+    /// Helper for hashForTxNum() et al; skips the cache entirely and reads directly from the database.
+    std::optional<TxHash> hashForTxNum_DBOnly(TxNum, bool throwIfMissng, bool storeResultInCache) const;
+    /// Helper for hashForTxNum() et al; like the above but reads only from the cache, never from the database.
+    std::optional<TxHash> hashForTxNum_CacheOnly(TxNum) const;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
