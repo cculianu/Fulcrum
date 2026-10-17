@@ -165,7 +165,7 @@ namespace Util {
         if (!nVProcs) {
             int a = 0;
             size_t b = sizeof(a);
-            if (0 == sysctlbyname("hw.ncpu",&a, &b, nullptr, 0)) {
+            if (0 == sysctlbyname("hw.ncpu", &a, &b, nullptr, 0)) {
                 nVProcs = unsigned(a); // this returns virtual CPUs which isn't always what we want..
             }
         }
@@ -178,7 +178,7 @@ namespace Util {
         if (!nProcs) {
             int a = 0;
             size_t b = sizeof(a);
-            if (0 == sysctlbyname("hw.physicalcpu",&a,&b,nullptr,0)) {
+            if (0 == sysctlbyname("hw.physicalcpu", &a, &b, nullptr, 0)) {
                 nProcs = unsigned(a);
             }
         }

@@ -375,7 +375,7 @@ std::vector<QByteArray> DBRecordArray::readRandomRecords(const std::span<const u
         }
     };
 
-    // We do this in batches so as to risk using ridiculous amounts of memory
+    // We do this in batches so as to not risk using ridiculous amounts of memory
     auto doBatch = [&](const std::span<const uint64_t> & batch) {
         std::map<VarIntBE, ByteView> buckets;
         for (const auto recNum : batch) {
