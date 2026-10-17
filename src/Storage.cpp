@@ -1319,14 +1319,13 @@ struct Storage::Pvt
     /// This cache is anticipated to see heavy use for get_history, so is configurable (config option: txhash_cache)
     /// This gets cleared by undoLatestBlock.
     CostCache<TxNum, TxHash> lruNum2Hash; // NOTE: max size in bytes initted in constructor
-
-    /// Helper threads for getHistory()'s hash lookups (config: history_lookup_threads); may be nullptr if disabled.
-    std::unique_ptr<ParallelForPool> historyLookupPool;
     static constexpr unsigned lruNum2HashSizeCalc(unsigned nItems = 1) {
         // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
         // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
         return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (Util::qByteArrayPvtDataSize() + HashLen+1)) );
     }
+    /// Helper threads for getHistory()'s hash lookups (config: history_lookup_threads); may be nullptr if disabled, related to the above cache.
+    std::unique_ptr<ParallelForPool> historyLookupPool;
 
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
     /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
