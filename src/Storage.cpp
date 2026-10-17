@@ -2446,11 +2446,11 @@ void Storage::maybeCreateHistoryLookupPool()
         // free up before it finishes, while the pool's queue stays bounded at 4x the number of threads.
         const size_t slack = 3 * nThreads;
         auto & hlp = p->historyLookupPool = std::make_unique<ParallelForPool>(nThreads, slack);
-        DebugM("Storage: ParallelForPool will use up to ", hlp->size(), " extra threads, with max queue size: ",
-               hlp->maxQueueSize());
+        Log() << "Storage: Will use " << hlp->size() << " additional threads for history lookup" << " (max qsize: "
+              << hlp->maxQueueSize() << ")";
     } else {
         p->historyLookupPool.reset(); // ensure disabled
-        DebugM("Storage: ParallelForPool disabled");
+        Log() << "Storage: No additional threads will be used for history lookup (ParallelForPool disabled)";
     }
 }
 
