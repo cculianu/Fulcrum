@@ -61,6 +61,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <concepts>
 #include <condition_variable>
 #include <cmath>
 #include <cstddef> // for std::byte, offsetof, ptrdiff_t
@@ -1129,50 +1130,28 @@ namespace {
 
     /* static */ const QByteArray TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix = "+largestTxNumSeen";
 
-} // namespace
-
-namespace {
-    /// A small fixed pool of helper threads for Storage::getHistory()'s hash lookups.
-    class LookupPool {
+    /// A small thread pool for doing a "parallel for" loop (used by Storage::getHistory() for lookups).
+    class ParallelForPool {
         std::mutex mut;
         std::condition_variable cond;
         std::deque<std::function<void()>> jobs;
         std::vector<std::thread> threads;
-        /// Helpers waiting for work, minus jobs already queued for them. It may go down to -slack, so a request can
-        /// also post jobs for helpers that are busy now but likely to free up soon; the queue therefore never holds
-        /// more than size() + slack jobs. slack = 0: post only for helpers that are idle right now.
-        std::atomic<ptrdiff_t> idle{0};
-        const ptrdiff_t slack;
+        const size_t maxJobs;
         bool stopping = false;
 
-        /// Reserve up to `want` helpers within that budget and return how many were reserved.
-        size_t reserveIdle(size_t want) {
-            ptrdiff_t cur = idle.load(), take;
-            do {
-                take = std::min<ptrdiff_t>(ptrdiff_t(want), cur + slack);
-                if (take <= 0) return 0;
-            } while (!idle.compare_exchange_weak(cur, cur - take));
-            return size_t(take);
-        }
-
-        /// Private on purpose: every job must come from a reservation made by reserveIdle(), or the queue bound and
-        /// the idle count no longer hold.
-        void post(std::function<void()> job) {
-            { std::lock_guard g(mut); jobs.push_back(std::move(job)); }
-            cond.notify_one();
-        }
     public:
-        explicit LookupPool(unsigned nThreads, ptrdiff_t slack_ = 0) : slack(std::max<ptrdiff_t>(0, slack_)) {
+        explicit ParallelForPool(unsigned nThreads, unsigned slack = 0) : maxJobs{nThreads + slack} {
+            if (!nThreads) [[unlikely]] throw BadArgs("INTERNAL ERROR: `nThreads` argument to ParallelForPool() may not be 0!");
             threads.reserve(nThreads);
+
             for (unsigned i = 0; i < nThreads; ++i)
                 threads.emplace_back([this] {
                     for (;;) {
                         std::function<void()> job;
                         {
                             std::unique_lock g(mut);
-                            ++idle;
                             cond.wait(g, [this] { return stopping || !jobs.empty(); });
-                            if (jobs.empty()) return; // stopping
+                            if (stopping || jobs.empty()) return; // stopping
                             job = std::move(jobs.front());
                             jobs.pop_front();
                         }
@@ -1180,20 +1159,22 @@ namespace {
                     }
                 });
         }
-        ~LookupPool() {
+        ~ParallelForPool() {
             { std::lock_guard g(mut); stopping = true; }
             cond.notify_all();
             for (auto & t : threads) t.join();
         }
         size_t size() const { return threads.size(); }
+        size_t maxQueueSize() const { return maxJobs; }
 
-        /// Calls fn(i) for every i in [0, n), on the calling thread and on up to n - 1 pool threads reserved via
-        /// reserveIdle(), and returns once all n calls have finished. The calling thread claims items too, so this
-        /// completes even when every pool thread is busy with other requests (with slack = 0, nothing is queued then).
-        /// Rethrows the first exception thrown by fn, after all calls finished.
-        void parallelFor(size_t n, const std::function<void(size_t)> & fn) {
+        /// Calls fn(i) for every i in [0, n), on the calling thread and on up to n - 1 pool threads, and returns once
+        /// all n calls have finished. The calling thread claims items too, so this completes even when every pool
+        /// thread is busy with other requests. Rethrows the first exception thrown by fn, after all calls finished.
+        template<std::invocable<size_t> Fun>
+        void parallelFor(size_t n, Fun && fn) {
+            if (!n) [[unlikely]] return; /* nothing to do */
             struct State {
-                std::atomic<size_t> next{0}, done{0};
+                std::atomic_size_t next{0}, done{0};
                 std::mutex mut;
                 std::condition_variable cond;
                 std::exception_ptr err;
@@ -1207,10 +1188,18 @@ namespace {
                     if (st->done.fetch_add(1) + 1 == n) { std::lock_guard g(st->mut); st->cond.notify_all(); }
                 }
             };
-            for (size_t h = 0, nh = reserveIdle(n ? n - 1 : 0); h < nh; ++h) post(worker);
-            worker();
+            if (n > 1) {
+                // We have more than 1 `n`, push all work for n >= 2 to be done in parallel (up to `maxJobs`).
+                std::lock_guard g(mut);
+                if (size_t jobsSz = jobs.size(); jobsSz < maxJobs) {
+                    const size_t nJobsAdd = std::min(n - 1, maxJobs - jobsSz);
+                    jobsSz += nJobsAdd;
+                    jobs.resize(jobsSz, worker); // push nJobsAdd copies of `worker` to the end of the deque
+                }
+            }
+            worker(); // do remaining work in this thread
             std::unique_lock g(st->mut);
-            st->cond.wait(g, [&] { return st->done.load() == n; });
+            st->cond.wait(g, [&] { return st->done.load() >= n; });
             if (st->err) std::rethrow_exception(st->err);
         }
     };
@@ -1331,15 +1320,15 @@ struct Storage::Pvt
     /// This gets cleared by undoLatestBlock.
     CostCache<TxNum, TxHash> lruNum2Hash; // NOTE: max size in bytes initted in constructor
 
-    /// Helper threads for getHistory()'s hash lookups (config: history_lookup_threads); nullptr when that is 1.
-    std::unique_ptr<LookupPool> historyLookupPool;
+    /// Helper threads for getHistory()'s hash lookups (config: history_lookup_threads); may be nullptr if disabled.
+    std::unique_ptr<ParallelForPool> historyLookupPool;
     static constexpr unsigned lruNum2HashSizeCalc(unsigned nItems = 1) {
         // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
         // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
         return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (Util::qByteArrayPvtDataSize() + HashLen+1)) );
     }
 
-    /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
+    /// Cache BlockHeight -> vector of txHwiashes for the block (in bitcoind memory order -- little endian).
     /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
     CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder; // NOTE: max size in bytes initted in constructor
     /// returns the cost for a particular cache item based on the number of hashes in the vector
@@ -1440,11 +1429,6 @@ Storage::Storage(const std::shared_ptr<const Options> & options_)
 {
     setObjectName("Storage");
     _thread.setObjectName(objectName());
-    if (options->historyLookupThreads > 1)
-        // slack = the helper count: a request may also post jobs for helpers that are busy right now but likely to
-        // free up before it finishes, while the pool's queue stays bounded at twice the number of helpers.
-        p->historyLookupPool = std::make_unique<LookupPool>(options->historyLookupThreads - 1,
-                                                            ptrdiff_t(options->historyLookupThreads - 1));
 }
 
 Storage::~Storage() { Debug() << __func__; cleanup(); }
@@ -1549,6 +1533,8 @@ void Storage::startup()
     // Detect an unclean shutdown on previous run and attempt to undo the latest block
     if (!didFulc1xUpgrade && options->flags.potentiallyUncleanShutdownDetected)
         uncleanShutdownDetectedUndoSomeBlocks();
+
+    maybeCreateHistoryLookupPool();
 
     emit dbSuccessfullyOpened(); // indicate to App instance we did open the DB ok.
 
@@ -2446,9 +2432,30 @@ void Storage::gentlyCloseDB()
     p->db.db.reset(db = nullptr);
 }
 
+void Storage::maybeCreateHistoryLookupPool()
+{
+    int nThreads = options->historyLookupThreads;
+    if (nThreads < 0)
+        // auto detect
+        nThreads = std::min(Util::getNPhysicalProcessors(), Options::historyLookUpThreadsAutoDetectMax);
+    if (nThreads > 1) {
+        --nThreads; // deduct one for calling thread
+        // slack = the helper count: a request may also post jobs for helpers that are busy right now but likely to
+        // free up before it finishes, while the pool's queue stays bounded at 4x the number of threads.
+        const size_t slack = 3 * nThreads;
+        auto & hlp = p->historyLookupPool = std::make_unique<ParallelForPool>(nThreads, slack);
+        DebugM("Storage: ParallelForPool will use up to ", hlp->size(), " extra threads, with max queue size: ",
+               hlp->maxQueueSize());
+    } else {
+        p->historyLookupPool.reset(); // ensure disabled
+        DebugM("Storage: ParallelForPool disabled");
+    }
+}
+
 void Storage::cleanup()
 {
     stop(); // joins our thread
+    if (p->historyLookupPool) p->historyLookupPool.reset(); // kill the pool
     if (p->blocksWorker) p->blocksWorker.reset(); // stop the co-task
     if (txsubsmgr) txsubsmgr->cleanup();
     if (dspsubsmgr) dspsubsmgr->cleanup();
@@ -2564,6 +2571,16 @@ auto Storage::stats() const -> Stats
             rm["needsFullCheck"] = p->rpaInfo.rpaNeedsFullCheckCachedVal.load(std::memory_order_relaxed);
             ret["RPA Index Info"] = rm;
         }
+    }
+
+    // Corresponds to conf option history_lookup_threads
+    if (p->historyLookupPool) {
+        QVariantMap m;
+        m["nExtraThreads"] = static_cast<qulonglong>(p->historyLookupPool->size());
+        m["maxQueue"] = static_cast<qulonglong>(p->historyLookupPool->maxQueueSize());
+        ret["history lookup pool"] = m;
+    } else {
+        ret["history lookup pool"] = QVariant{}; // null
     }
     return ret;
 }
@@ -4568,22 +4585,24 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
                         p->lruNum2Hash.insert(missNums[m], hash, p->lruNum2HashSizeCalc());
                         ret[misses[m]].hash = std::move(hash);
                     };
-                    static constexpr size_t kMinMissesPerChunk = 16;
+                    constexpr size_t kMinMissesPerChunk = 16;
                     const size_t nChunks = p->historyLookupPool
-                                           ? std::min<size_t>(p->historyLookupPool->size() + 1, misses.size() / kMinMissesPerChunk)
-                                           : 0;
+                                           ? std::min(p->historyLookupPool->size() + 1u, misses.size() / kMinMissesPerChunk)
+                                           : 1;
                     try {
                         if (nChunks < 2) {
                             for (size_t m = 0; m < misses.size(); ++m) lookup(m);
                         } else {
                             const size_t chunkLen = (misses.size() + nChunks - 1) / nChunks;
-                            p->historyLookupPool->parallelFor(nChunks, [&](size_t c) {
-                                for (size_t m = c * chunkLen, e = std::min(misses.size(), m + chunkLen); m < e; ++m) lookup(m);
+                            p->historyLookupPool->parallelFor(nChunks, [&](const size_t chunk) {
+                                for (size_t m = chunk * chunkLen, e = std::min(misses.size(), m + chunkLen); m < e; ++m)
+                                    lookup(m);
                             });
                         }
                     } catch (...) {
-                        // As before this change: on error, return only the items before the first unresolved one.
-                        ret.erase(std::find_if(ret.begin(), ret.end(), [](const HistoryItem &h) { return h.hash.isEmpty(); }), ret.end());
+                        // Return only the items before the first unresolved one.
+                        ret.erase(std::find_if(ret.begin(), ret.end(), [](const HistoryItem &h) { return h.hash.isEmpty(); }),
+                                  ret.end());
                         throw;
                     }
                 }

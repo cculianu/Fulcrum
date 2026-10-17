@@ -524,6 +524,9 @@ private:
     // Called from startup() to warn the user there was an unclean shutdown detected and attempt to undo the last 6 blocks
     void uncleanShutdownDetectedUndoSomeBlocks();
 
+    // Called from startup() to maybe create the history lookup pool (internal thread pool to speed up getHistory())
+    void maybeCreateHistoryLookupPool();
+
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;
 
