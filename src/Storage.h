@@ -554,7 +554,7 @@ private:
                                     const QByteArray &serializedRpaPrefixTable);
 
     /// Helper for hashForTxNum() et al; skips the cache entirely and reads directly from the database.
-    std::optional<TxHash> hashForTxNum_DBOnly(TxNum, bool throwIfMissng, bool storeResultInCache) const;
+    std::optional<TxHash> hashForTxNum_DBOnly(TxNum, bool throwIfMissing, bool storeResultInCache) const;
     /// Helper for hashForTxNum() et al; like the above but reads only from the cache, never from the database.
     std::optional<TxHash> hashForTxNum_CacheOnly(TxNum) const;
 };
