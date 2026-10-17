@@ -275,7 +275,7 @@ public:
     /// The number of threads (counting the one serving the request) that get_history and the subscription status
     /// computation use to look up the hashes of confirmed history items that are not in the txhash cache. Each such
     /// lookup is a random read, so a large cold history is otherwise read one item at a time. 0/1 = serial lookups,
-    /// -1 to auto-detect based on number of cores (up to 8 threads in this auto-detection mode).
+    /// -1 to auto-detect based on number of virtual cores (up to 8 threads in this auto-detection mode).
     static constexpr int defaultHistoryLookupThreads = -1, historyLookupThreadsMin = -1, historyLookupThreadsMax = 64;
     static constexpr unsigned historyLookUpThreadsAutoDetectMax = 8; // if using -1 to auto-detect, this is the max allowed
     static constexpr bool isHistoryLookupThreadsInRange(int n) { return n >= historyLookupThreadsMin && n <= historyLookupThreadsMax; }

@@ -2439,7 +2439,7 @@ void Storage::maybeCreateHistoryLookupPool()
     int nThreads = options->historyLookupThreads;
     if (nThreads < 0)
         // auto detect
-        nThreads = std::min(Util::getNPhysicalProcessors(), Options::historyLookUpThreadsAutoDetectMax);
+        nThreads = std::min(Util::getNVirtualProcessors(), Options::historyLookUpThreadsAutoDetectMax);
     if (nThreads > 1) {
         --nThreads; // deduct one for calling thread
         // slack = the helper count: a request may also post jobs for helpers that are busy right now but likely to
