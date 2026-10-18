@@ -39,7 +39,7 @@
         "pruning": "-",
         "s": "50002",
         "t": "50001",
-        "version": "1.6"
+        "version": "1.4.1"
     },
     "electron.jochen-hoenicke.de": {
         "pruning": "-",
@@ -51,7 +51,7 @@
         "pruning": "-",
         "s": "50002",
         "t": "50001",
-        "version": "1.6"
+        "version": "1.4.2"
     },
     "electrum.imaginary.cash": {
         "pruning": "-",
@@ -82,8 +82,14 @@
     },
     "bitcoincash.network": {
         "pruning": "-",
+        "s": "50002",
+        "version": "1.4.1"
+    },
+    "electrum.bitcoinverde.org": {
+        "pruning": "-",
+        "s": "50002",
         "t": "50001",
-        "version": "1.4.3"
+        "version": "1.4.4"
     },
     "cashnode.bch.ninja": {
         "pruning": "-",
@@ -111,5 +117,22 @@
         "pruning": "-",
         "s": "50002",
         "version": "1.5.3"
+    },
+    "niblerino.com": {
+        "pruning": "-",
+        "t": "50001",
+        "s": "50002",
+        "version": "1.6"
+    },
+    "bch.event.cash": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.6"
+    },
+    "udfpzbte2hommnvag5f3qlouqkhvp3xybhlus2yvfeqdwlhjroe4bbyd.onion": {
+        "pruning": "-",
+        "t": "50001",
+        "s": "50002",
+        "version": "1.6"
     }
 }
