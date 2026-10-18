@@ -2436,12 +2436,9 @@ void Storage::gentlyCloseDB()
 
 void Storage::maybeCreateHistoryLookupPool()
 {
-    int nThreads = options->historyLookupThreads;
-    if (nThreads < 0)
-        // auto detect
-        nThreads = std::min(Util::getNVirtualProcessors(), Options::historyLookUpThreadsAutoDetectMax);
+    unsigned nThreads = options->historyLookupThreads;
     if (nThreads > 1) {
-        --nThreads; // deduct one for calling thread
+        --nThreads; // deduct one for the calling thread that will be using the pool (it does work as well)
         // slack = the helper count: a request may also post jobs for helpers that are busy right now but likely to
         // free up before it finishes, while the pool's queue stays bounded at 4x the number of threads.
         const size_t slack = 3 * nThreads;
@@ -2449,8 +2446,9 @@ void Storage::maybeCreateHistoryLookupPool()
         Log() << "Storage: Will use " << hlp->size() << " additional threads for history lookup" << " (max qsize: "
               << hlp->maxQueueSize() << ")";
     } else {
+        // No extra threads; pool not needed (we use just the calling thread to lookup tx hashes for getHistory()).
         p->historyLookupPool.reset(); // ensure disabled
-        Log() << "Storage: No additional threads will be used for history lookup (ParallelForPool disabled)";
+        Log() << "Storage: No additional threads will be used for history lookup (pooled lookup disabled)";
     }
 }
 

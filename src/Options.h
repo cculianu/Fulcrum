@@ -273,13 +273,14 @@ public:
 
     // config: history_lookup_threads
     /// The number of threads (counting the one serving the request) that get_history and the subscription status
-    /// computation use to look up the hashes of confirmed history items that are not in the txhash cache. Each such
-    /// lookup is a random read, so a large cold history is otherwise read one item at a time. 0/1 = serial lookups,
-    /// -1 to auto-detect based on number of virtual cores (up to 8 threads in this auto-detection mode).
-    static constexpr int defaultHistoryLookupThreads = -1, historyLookupThreadsMin = -1, historyLookupThreadsMax = 64;
-    static constexpr unsigned historyLookUpThreadsAutoDetectMax = 8; // if using -1 to auto-detect, this is the max allowed
-    static constexpr bool isHistoryLookupThreadsInRange(int n) { return n >= historyLookupThreadsMin && n <= historyLookupThreadsMax; }
-    int historyLookupThreads = defaultHistoryLookupThreads;
+    /// computation use to look up the tx hashes of confirmed HistoryItems (for items that are not in the txhash cache).
+    /// Each such lookup is a random read from the DB, so a large cold history benefits from parallelization, to
+    /// maximize the use of overlapping reads at the OS level. Value 1 = serial lookups, values >1 are for parallel.
+    /// Note that parallelization of reads also benefits low-core-count systems, so the default value of 8 is good for
+    /// many different types of systems.
+    static constexpr unsigned defaultHistoryLookupThreads = 8, historyLookupThreadsMin = 1, historyLookupThreadsMax = 64;
+    static constexpr bool isHistoryLookupThreadsInRange(unsigned n) { return n >= historyLookupThreadsMin && n <= historyLookupThreadsMax; }
+    unsigned historyLookupThreads = defaultHistoryLookupThreads;
 
     // CLI: --compact-dbs
     /// If specified, we compact all of the databases on startup

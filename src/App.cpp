@@ -1444,7 +1444,7 @@ void App::parseArgs()
     // conf: history_lookup_threads
     if (conf.hasValue("history_lookup_threads")) {
         bool ok{};
-        const int val = conf.intValue("history_lookup_threads", Options::defaultHistoryLookupThreads, &ok);
+        const unsigned val = conf.intValue("history_lookup_threads", Options::defaultHistoryLookupThreads, &ok);
         if (!ok || !options->isHistoryLookupThreadsInRange(val))
             throw BadArgs(QString("history_lookup_threads: please specify a value in the range [%1, %2]")
                           .arg(options->historyLookupThreadsMin).arg(options->historyLookupThreadsMax));
