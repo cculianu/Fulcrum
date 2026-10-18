@@ -61,10 +61,13 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <concepts>
+#include <condition_variable>
 #include <cmath>
 #include <cstddef> // for std::byte, offsetof, ptrdiff_t
 #include <cstdlib>
 #include <cstring> // for memcpy
+#include <deque>
 #include <functional>
 #include <future>
 #include <limits>
@@ -1127,6 +1130,84 @@ namespace {
 
     /* static */ const QByteArray TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix = "+largestTxNumSeen";
 
+    /// A small thread pool for doing a "parallel for" loop (used by Storage::getHistory() for lookups).
+    class ParallelForPool {
+        mutable std::mutex mut;
+        std::condition_variable cond;
+        std::deque<std::function<void()>> jobs;
+        std::vector<std::thread> threads;
+        const size_t maxJobs;
+        bool stopping = false;
+
+    public:
+        explicit ParallelForPool(unsigned nThreads, unsigned slack = 0) : maxJobs{nThreads + slack} {
+            if (!nThreads) [[unlikely]] throw BadArgs("INTERNAL ERROR: `nThreads` argument to ParallelForPool() may not be 0!");
+            threads.reserve(nThreads);
+
+            for (unsigned i = 0; i < nThreads; ++i)
+                threads.emplace_back([this] {
+                    for (;;) {
+                        std::function<void()> job;
+                        {
+                            std::unique_lock g(mut);
+                            cond.wait(g, [this] { return stopping || !jobs.empty(); });
+                            if (stopping || jobs.empty()) return; // stopping
+                            job = std::move(jobs.front());
+                            jobs.pop_front();
+                        }
+                        job();
+                    }
+                });
+        }
+        ~ParallelForPool() {
+            { std::lock_guard g(mut); stopping = true; }
+            cond.notify_all();
+            for (auto & t : threads) t.join();
+        }
+        size_t size() const { return threads.size(); }
+        size_t maxQueueSize() const { return maxJobs; }
+        /// Returns the current number of items in the queue (unless the pool is doing work this is usually 0).
+        size_t queueSize() const { std::lock_guard g(mut); return jobs.size(); }
+
+        /// Calls fn(i) for every i in [0, n), on the calling thread and on up to n - 1 pool threads, and returns once
+        /// all n calls have finished. The calling thread claims items too, so this completes even when every pool
+        /// thread is busy with other requests. Rethrows the first exception thrown by fn, after all calls finished.
+        template<std::invocable<size_t> Fun>
+        void parallelFor(size_t n, Fun && fn) {
+            if (!n) [[unlikely]] return; /* nothing to do */
+            struct State {
+                std::atomic_size_t next{0}, done{0};
+                std::mutex mut;
+                std::condition_variable cond;
+                std::exception_ptr err;
+            };
+            auto st = std::make_shared<State>();
+            // NB: `fn` is only dereferenced after claiming an index < n, and we do not return before all n are done,
+            // so a helper that runs late (after all items were claimed) never touches it.
+            auto worker = [st, n, &fn] {
+                for (size_t i; (i = st->next.fetch_add(1)) < n; ) {
+                    try { fn(i); } catch (...) { std::lock_guard g(st->mut); if (!st->err) st->err = std::current_exception(); }
+                    if (st->done.fetch_add(1) + 1 == n) { std::lock_guard g(st->mut); st->cond.notify_all(); }
+                }
+            };
+            bool didAddJobs = false;
+            if (n > 1) {
+                // We have more than 1 `n`, push all work for n >= 2 to be done in parallel (up to `maxJobs`).
+                std::lock_guard g(mut);
+                if (size_t jobsSz = jobs.size(); jobsSz < maxJobs) {
+                    const size_t nJobsAdd = std::min(n - 1, maxJobs - jobsSz);
+                    jobsSz += nJobsAdd;
+                    jobs.resize(jobsSz, worker); // push nJobsAdd copies of `worker` to the end of the deque
+                    didAddJobs = true;
+                }
+            }
+            if (didAddJobs) cond.notify_all(); // wake the workers with the mutex no longer held as a perf. opt (only if we did actually add new jobs)
+            worker(); // do remaining work in this thread
+            std::unique_lock g(st->mut);
+            st->cond.wait(g, [&] { return st->done.load() >= n; });
+            if (st->err) std::rethrow_exception(st->err);
+        }
+    };
 } // namespace
 
 struct Storage::Pvt
@@ -1248,6 +1329,8 @@ struct Storage::Pvt
         // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
         return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (Util::qByteArrayPvtDataSize() + HashLen+1)) );
     }
+    /// Helper threads for getHistory()'s hash lookups (config: history_lookup_threads); may be nullptr if disabled, related to the above cache.
+    std::unique_ptr<ParallelForPool> historyLookupPool;
 
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
     /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
@@ -1454,6 +1537,8 @@ void Storage::startup()
     // Detect an unclean shutdown on previous run and attempt to undo the latest block
     if (!didFulc1xUpgrade && options->flags.potentiallyUncleanShutdownDetected)
         uncleanShutdownDetectedUndoSomeBlocks();
+
+    maybeCreateHistoryLookupPool();
 
     emit dbSuccessfullyOpened(); // indicate to App instance we did open the DB ok.
 
@@ -2351,9 +2436,28 @@ void Storage::gentlyCloseDB()
     p->db.db.reset(db = nullptr);
 }
 
+void Storage::maybeCreateHistoryLookupPool()
+{
+    unsigned nThreads = options->historyLookupThreads;
+    if (nThreads > 1) {
+        --nThreads; // deduct one for the calling thread that will be using the pool (it does work as well)
+        // slack = the helper count: a request may also post jobs for helpers that are busy right now but likely to
+        // free up before it finishes, while the pool's queue stays bounded at 4x the number of threads.
+        const size_t slack = 3 * nThreads;
+        auto & hlp = p->historyLookupPool = std::make_unique<ParallelForPool>(nThreads, slack);
+        Log() << "Storage: Will use " << hlp->size() << " additional threads for history lookup" << " (max qsize: "
+              << hlp->maxQueueSize() << ")";
+    } else {
+        // No extra threads; pool not needed (we use just the calling thread to lookup tx hashes for getHistory()).
+        p->historyLookupPool.reset(); // ensure disabled
+        Log() << "Storage: No additional threads will be used for history lookup (pooled lookup disabled)";
+    }
+}
+
 void Storage::cleanup()
 {
     stop(); // joins our thread
+    if (p->historyLookupPool) p->historyLookupPool.reset(); // kill the pool
     if (p->blocksWorker) p->blocksWorker.reset(); // stop the co-task
     if (txsubsmgr) txsubsmgr->cleanup();
     if (dspsubsmgr) dspsubsmgr->cleanup();
@@ -2469,6 +2573,17 @@ auto Storage::stats() const -> Stats
             rm["needsFullCheck"] = p->rpaInfo.rpaNeedsFullCheckCachedVal.load(std::memory_order_relaxed);
             ret["RPA Index Info"] = rm;
         }
+    }
+
+    // Corresponds to conf option history_lookup_threads
+    if (p->historyLookupPool) {
+        QVariantMap m;
+        m["nExtraThreads"] = static_cast<qulonglong>(p->historyLookupPool->size());
+        m["maxQueue"] = static_cast<qulonglong>(p->historyLookupPool->maxQueueSize());
+        m["currentQueueSize"] = static_cast<qulonglong>(p->historyLookupPool->queueSize());
+        ret["History Lookup Pool"] = m;
+    } else {
+        ret["History Lookup Pool"] = QVariant{}; // null
     }
     return ret;
 }
@@ -4265,18 +4380,9 @@ int64_t Storage::readUtxoCtFromDB() const
     return GenericDBGet<int64_t>(p->db, p->db.meta, kUtxoCount, true, errPrefix, false, p->db.defReadOpts).value_or(0LL);
 }
 
-
-std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const
+std::optional<TxHash> Storage::hashForTxNum_DBOnly(TxNum n, bool throwIfMissing, bool storeResultInCache) const
 {
     std::optional<TxHash> ret;
-    if (!skipCache) ret = p->lruNum2Hash.object(n);
-    if (ret.has_value()) {
-        if (wasCached) *wasCached = true;
-        ++p->lruCacheStats.num2HashHits;
-        return ret;
-    } else if (wasCached) *wasCached = false;
-    if (!skipCache) ++p->lruCacheStats.num2HashMisses;
-
     static const QString kErrMsg ("Error reading TxHash for TxNum %1: %2");
     QString errStr;
     const auto bytes = p->db.txNumsDRA->readRecord(n, &errStr);
@@ -4287,11 +4393,32 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
         Warning() << errStr;
     } else {
         ret.emplace(bytes);
+        if (storeResultInCache)
+            // save to cache
+            p->lruNum2Hash.insert(n, *ret, p->lruNum2HashSizeCalc());
     }
-    if (!skipCache && ret.has_value()) {
-        // save in cache
-        p->lruNum2Hash.insert(n, *ret, p->lruNum2HashSizeCalc());
-    }
+    return ret;
+}
+
+std::optional<TxHash> Storage::hashForTxNum_CacheOnly(TxNum n) const
+{
+    std::optional<TxHash> ret = p->lruNum2Hash.object(n);
+    if (ret.has_value()) ++p->lruCacheStats.num2HashHits;
+    else ++p->lruCacheStats.num2HashMisses;
+    return ret;
+}
+
+std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const
+{
+    std::optional<TxHash> ret;
+    if (!skipCache) ret = hashForTxNum_CacheOnly(n);
+    if (ret.has_value()) {
+        if (wasCached) *wasCached = true;
+        return ret;
+    } else if (wasCached) *wasCached = false;
+
+    ret = hashForTxNum_DBOnly(n, throwIfMissing, !skipCache);
+
     return ret;
 }
 
@@ -4443,12 +4570,10 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
                 const auto & nums = *nums_opt;
                 IncrementCtrAndThrowIfExceedsMaxHistory(nums.size());
                 ret.reserve(nums.size());
-                // TODO: The below could use some optimization.  A batched version of both hashForTxNum and
-                // heightForTxNum are low-hanging fruit for optimization.  Each call to the below takes a shared lock
-                // then releases it, for each item.  I imagine batched versions would have significantly less overhead
-                // per item, which could add up to huge performance savings on large histories.  This is a very
-                // low hanging fruit for optimization -- thus I am leaving this comment here so I can remember to come
-                // back and optmize the below.  /TODO
+                // Heights come from an in-memory map, and hashes from the txhash cache when present. Resolve both
+                // in order, and collect the items whose hash has to be read from the db.
+                std::vector<size_t> misses; // indices into `ret`
+                std::vector<TxNum> missNums; // the txnum of each of `misses`
                 for (auto num : nums) {
                     const BlockHeight height = heightForTxNum(num).value(); // may throw, same deal
 
@@ -4456,8 +4581,42 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
                     if (optToHeight && height >= *optToHeight) break; // threshold of "to height" reached
                     else if (height < fromHeight) continue; // keep looping until we hit a height that at least "from height"
 
-                    const auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
-                    ret.emplace_back(/* HistoryItem: */ hash, int(height));
+                    auto & item = ret.emplace_back(/* HistoryItem: */ TxHash{}, int(height));
+                    if (auto cached = hashForTxNum_CacheOnly(num)) {
+                        item.hash = std::move(*cached);
+                    } else {
+                        misses.push_back(ret.size() - 1);
+                        missNums.push_back(num);
+                    }
+                }
+                // Each miss is a random read from txnum2txhash, and the txnums of one history are spread across the
+                // whole chain. Read serially, a cold history waits on one read at a time, so spread large batches of
+                // misses over the lookup pool to keep several reads in flight.
+                if (!misses.empty()) {
+                    auto lookup = [&](size_t m) {
+                        auto hash = hashForTxNum_DBOnly(missNums[m], true, true).value(); // may throw, but that indicates some database inconsistency. we catch below
+                        ret[misses[m]].hash = std::move(hash);
+                    };
+                    constexpr size_t kMinMissesPerChunk = 16;
+                    const size_t nChunks = p->historyLookupPool
+                                           ? std::min(p->historyLookupPool->size() + 1u, misses.size() / kMinMissesPerChunk)
+                                           : 1;
+                    try {
+                        if (nChunks < 2) {
+                            for (size_t m = 0; m < misses.size(); ++m) lookup(m);
+                        } else {
+                            const size_t chunkLen = (misses.size() + nChunks - 1) / nChunks;
+                            p->historyLookupPool->parallelFor(nChunks, [&](const size_t chunk) {
+                                for (size_t m = chunk * chunkLen, e = std::min(misses.size(), m + chunkLen); m < e; ++m)
+                                    lookup(m);
+                            });
+                        }
+                    } catch (...) {
+                        // Return only the items before the first unresolved one.
+                        ret.erase(std::find_if(ret.begin(), ret.end(), [](const HistoryItem &h) { return h.hash.isEmpty(); }),
+                                  ret.end());
+                        throw;
+                    }
                 }
             }
         }

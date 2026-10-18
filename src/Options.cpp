@@ -185,6 +185,8 @@ QVariantMap Options::toMap() const
     m["max_reorg"] = maxReorg;
     // txhash_cache
     m["txhash_cache"] = txHashCacheBytes / 1e6; // this comes in as a MB value from config, so spit it back out in the same MB unit
+    // history_lookup_threads
+    m["history_lookup_threads"] = historyLookupThreads;
     // max_batch
     m["max_batch"] = maxBatch;
     // anon_logs

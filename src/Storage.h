@@ -524,6 +524,9 @@ private:
     // Called from startup() to warn the user there was an unclean shutdown detected and attempt to undo the last 6 blocks
     void uncleanShutdownDetectedUndoSomeBlocks();
 
+    // Called from startup() to maybe create the history lookup pool (internal thread pool to speed up getHistory())
+    void maybeCreateHistoryLookupPool();
+
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;
 
@@ -549,6 +552,11 @@ private:
     /// Writes to the RPA table. Called from addBlock()
     void addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, BlockHeight height, const BlockHash &blockHash,
                                     const QByteArray &serializedRpaPrefixTable);
+
+    /// Helper for hashForTxNum() et al; skips the cache entirely and reads directly from the database.
+    std::optional<TxHash> hashForTxNum_DBOnly(TxNum, bool throwIfMissing, bool storeResultInCache) const;
+    /// Helper for hashForTxNum() et al; like the above but reads only from the cache, never from the database.
+    std::optional<TxHash> hashForTxNum_CacheOnly(TxNum) const;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
