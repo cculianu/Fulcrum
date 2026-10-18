@@ -1132,7 +1132,7 @@ namespace {
 
     /// A small thread pool for doing a "parallel for" loop (used by Storage::getHistory() for lookups).
     class ParallelForPool {
-        std::mutex mut;
+        mutable std::mutex mut;
         std::condition_variable cond;
         std::deque<std::function<void()>> jobs;
         std::vector<std::thread> threads;
@@ -1166,6 +1166,8 @@ namespace {
         }
         size_t size() const { return threads.size(); }
         size_t maxQueueSize() const { return maxJobs; }
+        /// Returns the current number of items in the queue (unless the pool is doing work this is usually 0).
+        size_t queueSize() const { std::lock_guard g(mut); return jobs.size(); }
 
         /// Calls fn(i) for every i in [0, n), on the calling thread and on up to n - 1 pool threads, and returns once
         /// all n calls have finished. The calling thread claims items too, so this completes even when every pool
@@ -2578,9 +2580,10 @@ auto Storage::stats() const -> Stats
         QVariantMap m;
         m["nExtraThreads"] = static_cast<qulonglong>(p->historyLookupPool->size());
         m["maxQueue"] = static_cast<qulonglong>(p->historyLookupPool->maxQueueSize());
-        ret["history lookup pool"] = m;
+        m["currentQueueSize"] = static_cast<qulonglong>(p->historyLookupPool->queueSize());
+        ret["History Lookup Pool"] = m;
     } else {
-        ret["history lookup pool"] = QVariant{}; // null
+        ret["History Lookup Pool"] = QVariant{}; // null
     }
     return ret;
 }
