@@ -52,7 +52,7 @@ public:
     /// output the configured options to the /stats output JSON, for example.
     QVariantMap toMap() const;
 
-    static constexpr quint16 DEFAULT_PORT_TCP = 50001, DEFAULT_PORT_SSL = 50002, DEFAULT_PORT_WS = 50003, DEFAULT_PORT_WSS = 50004;
+    static constexpr quint16 DEFAULT_PORT_TCP = 50001, DEFAULT_PORT_SSL = 50002, DEFAULT_PORT_WS = 50003, DEFAULT_PORT_WSS = 50004, DEFAULT_PORT_HTTP = 50005, DEFAULT_PORT_HTTPS = 50006;
 
     std::atomic_bool verboseDebug =
 #ifdef QT_DEBUG
@@ -72,7 +72,9 @@ public:
     QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
                      sslInterfaces,  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
                      wsInterfaces,   ///< Web Socket (WS) interfaces. Defaults to nothing.
-                     wssInterfaces;  ///< Web Socket Secure (WSS) interfaces. Defaults to nothing.
+                     wssInterfaces,  ///< Web Socket Secure (WSS) interfaces. Defaults to nothing.
+                     httpInterfaces, ///< HTTP interfaces. Defaults to nothing.
+                     httpsInterfaces;///< HTTPS interfaces. Defaults to nothing.
     QList<Interface> statsInterfaces; ///< 'stats' server, defaults to empty (no stats server)
     QList<Interface> adminInterfaces; ///< the admin server, defaults to empty (no admin RPC)
     struct CertInfo {
@@ -87,7 +89,10 @@ public:
         CertInfo certInfo;
         /// if valid, then the user specified --wss-cert and --wss-key on CLI or in config, and these are those.
         std::optional<CertInfo> wssCertInfo;
+        /// if valid, then the user specified --https-cert and --https-key on CLI or in config, and these are those.
+        std::optional<CertInfo> httpsCertInfo;
     };
+    QString httpCorsDomain; ///< if set, the value to use for Access-Control-Allow-Origin header on HTTP(S) responses
     AtomicStruct<Certs> certs; ///< gets writeen-to at App init and also by the SSLCertMonitor
     BitcoinD_RPCInfo bdRPCInfo; ///< contains: rpcs user, rpc pass, host, port, and usesTls (see BitcoinD_RPCInfo.h)
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
@@ -116,10 +121,14 @@ public:
     std::optional<quint16> publicSsl;   ///< corresponds to public_ssl_port in server config -- if unspecified will default to the first SSL interface, if !has_value, it will not be announced
     std::optional<quint16> publicWs;   ///< corresponds to public_ws_port in server config -- if unspecified will default to the first WS interface, if !has_value, it will not be announced
     std::optional<quint16> publicWss;   ///< corresponds to public_wss_port in server config -- if unspecified will default to the first WSS interface, if !has_value, it will not be announced
+    std::optional<quint16> publicHttp;   ///< corresponds to public_http_port in server config -- if unspecified will default to the first HTTP interface, if !has_value, it will not be announced
+    std::optional<quint16> publicHttps;   ///< corresponds to public_http_port in server config -- if unspecified will default to the first HTTPS interface, if !has_value, it will not be announced
     std::optional<quint16> torTcp;   ///< corresponds to tor_tcp_port in server config -- if unspecified will not announce tcp on tor route.
     std::optional<quint16> torSsl;   ///< corresponds to tor_ssl_port in server config -- if unspecified will not announce ssl on tor route.
     std::optional<quint16> torWs;   ///< corresponds to tor_ws_port in server config -- if unspecified will not announce ws on tor route.
     std::optional<quint16> torWss;   ///< corresponds to tor_wss_port in server config -- if unspecified will not announce wss on tor route.
+    std::optional<quint16> torHttp;   ///< corresponds to tor_http_port in server config -- if unspecified will not announce http on tor route.
+    std::optional<quint16> torHttps;   ///< corresponds to tor_https_port in server config -- if unspecified will not announce https on tor route.
 
     // Max clients per IP related
     static constexpr int defaultMaxClientsPerIP = 12;
