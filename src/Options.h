@@ -253,6 +253,11 @@ public:
     static constexpr bool isBdNClientsInRange(unsigned n) { return n >= bdNClientsMin && n <= bdNClientsMax; }
     unsigned bdNClients = defaultBdNClients;
 
+    // config: coin
+    /// One of "BCH", "BTC" or "LTC". If set, overrides the coin otherwise detected from bitcoind's subversion string.
+    /// Empty means auto-detect.
+    QString coin;
+
     // config: max_reorg
     /// Corresponds to the number of undo entries we keep in the DB. Older Fulcrum versions had this hard-coded
     /// as 100, and assumed 100 was the magic number.  As such, 100 is the minimum we support.  The maximum

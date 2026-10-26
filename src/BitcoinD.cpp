@@ -45,8 +45,8 @@ namespace {
     const QVariantList kPingParamsFast = {}, kPingParamsSlow = {{"help"}};
 }
 
-BitcoinDMgr::BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rinf)
-    : Mgr(nullptr), IdMixin(newId()), nClients(nClients), rpcInfo(rinf)
+BitcoinDMgr::BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rinf, BTC::Coin coinOverride)
+    : Mgr(nullptr), IdMixin(newId()), nClients(nClients), rpcInfo(rinf), coinOverride(coinOverride)
 {
     setObjectName("BitcoinDMgr");
     _thread.setObjectName(objectName());
@@ -206,6 +206,9 @@ namespace {
         BitcoinDVersionParseResult(unsigned val, const QString &subversion);
 
         bool definitelyLacksDSProofRPC() const;
+        /// A configured coin wins over detection, including for the RPC quirk flags derived from isCore/isLTC.
+        /// Coin::Unknown leaves the detected flags as they are.
+        void applyCoinOverride(BTC::Coin coin);
     };
 
     BitcoinDVersionParseResult::BitcoinDVersionParseResult(unsigned val, const QString &subversion) {
@@ -252,6 +255,13 @@ namespace {
         // for all other remote daemons, return false so that calling code will probe.
         return false;
     }
+
+    void BitcoinDVersionParseResult::applyCoinOverride(BTC::Coin coin) {
+        if (coin == BTC::Coin::Unknown)
+            return;
+        isCore = coin == BTC::Coin::BTC;
+        isLTC = coin == BTC::Coin::LTC;
+    }
 }
 
 void BitcoinDMgr::refreshBitcoinDNetworkInfo()
@@ -281,6 +291,7 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                         return {};
                     }
                 }(bitcoinDInfo.subversion, networkInfo);
+                res.applyCoinOverride(coinOverride);
                 // assign to shared object now from stack object BitcoinDVersionParseResult
                 std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore, bitcoinDInfo.isBU, bitcoinDInfo.isLTC,
                          bitcoinDInfo.isFlowee, bitcoinDInfo.version)
@@ -1095,3 +1106,45 @@ qint64 BitcoinDMgr::CachedResult::ageMSec() const
 {
     return std::max<qint64>(Util::getTime() - timeStamp, 0);
 }
+
+#ifdef ENABLE_TESTS
+#include "App.h"
+
+namespace {
+    void testCoinOverride()
+    {
+        size_t ctr = 0;
+#define CHK(x) do { if (!(x)) throw Exception("Check failed: " #x); ++ctr; } while (0)
+        const unsigned ver = 310100; // Core 31.1.0, which Fulcrum represents as 0.31.1
+        const auto parse = [ver](const QString &subversion, BTC::Coin coin) {
+            BitcoinDVersionParseResult res(ver, subversion);
+            res.applyCoinOverride(coin);
+            return res;
+        };
+
+        // no override: detection as before
+        auto r = parse("/Satoshi:31.1.0/", BTC::Coin::Unknown);
+        CHK(r.isCore && !r.isLTC);
+        r = parse("/LitecoinCore:0.21.4/", BTC::Coin::Unknown);
+        CHK(!r.isCore && r.isLTC);
+        r = parse("/Some Fork:31.1.0/", BTC::Coin::Unknown);
+        CHK(!r.isCore && !r.isLTC);
+
+        // override wins over the subversion string, in both directions
+        r = parse("/Some Fork:31.1.0/", BTC::Coin::BTC);
+        CHK(r.isCore && !r.isLTC && r.definitelyLacksDSProofRPC());
+        r = parse("/Some Fork:31.1.0/", BTC::Coin::LTC);
+        CHK(!r.isCore && r.isLTC);
+        r = parse("/Satoshi:31.1.0/", BTC::Coin::BCH);
+        CHK(!r.isCore && !r.isLTC);
+
+        // the version is still parsed from the daemon, so version-gated quirks keep working
+        CHK(r.version == Version(0, 31, 1));
+
+        Log() << "coinoverride passed " << ctr << " checks ok";
+#undef CHK
+    }
+
+    const auto t = App::registerTest("coinoverride", testCoinOverride);
+} // namespace
+#endif
