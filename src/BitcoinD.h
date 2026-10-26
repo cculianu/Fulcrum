@@ -80,7 +80,7 @@ class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public
 {
     Q_OBJECT
 public:
-    BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rpcInfo);
+    BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rpcInfo, BTC::Coin coinOverride = BTC::Coin::Unknown);
     ~BitcoinDMgr() override;
 
     void startup() override; ///< from Mgr
@@ -148,7 +148,7 @@ signals:
 
     /// Emitted as soon as we read the bitcoind subversion. If it starts with /Satoshi:.., we emit this
     /// with Coin::BTC, if subversion is /LitecoinCore... we emit Coin::LTC, otherwise, we emit it with
-    /// Coin::BCH.
+    /// Coin::BCH. A configured `coin` takes precedence over all of these.
     void coinDetected(BTC::Coin);
 
     /// Emitted whenever the BitcoinDZmqNotifications change (this is also emitted the first time we retrieve them
@@ -183,6 +183,7 @@ protected slots:
 
 private:
     const BitcoinD_RPCInfo rpcInfo;
+    const BTC::Coin coinOverride; ///< from the `coin` config option; Unknown means auto-detect from the subversion string
 
     static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000;
 

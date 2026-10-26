@@ -1418,6 +1418,15 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [n, name]{ DebugM("config: ", name, " = ", n); });
     }
 
+    // conf: coin
+    if (conf.hasValue("coin")) {
+        const QString val = conf.value("coin").toUpper();
+        if (BTC::coinFromName(val) == BTC::Coin::Unknown)
+            throw BadArgs("coin: please specify one of BCH, BTC, or LTC");
+        options->coin = val;
+        Util::AsyncOnObject(this, [val]{ DebugM("config: coin = ", val); });
+    }
+
     // conf: max_reorg
     if (conf.hasValue("max_reorg")) {
         bool ok{};

@@ -181,6 +181,8 @@ QVariantMap Options::toMap() const
     m["bitcoind_timeout"] = bdTimeoutMS;
     // bitcoind_clients
     m["bitcoind_clients"] = bdNClients;
+    // coin
+    m["coin"] = coin;
     // max_reorg
     m["max_reorg"] = maxReorg;
     // txhash_cache
