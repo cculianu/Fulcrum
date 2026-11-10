@@ -250,3 +250,21 @@ This is the BTC-equivalent of the above BCH address, which is: **`1BCHBCH6TXBaXy
 ### Sponsors
 
 ![General Protocols](https://c3-soft.com/imgs/general-protocols.png)
+
+### Address transaction counts
+
+`blockchain.address.get_history_count(address, include_unconfirmed=false)` and
+`blockchain.scripthash.get_history_count(scripthash, include_unconfirmed=false)`
+return an exact integer transaction count. By default only confirmed transactions
+are counted; pass `true` to include unconfirmed transactions, including those
+with unconfirmed parents. Transactions are counted once per address/scripthash,
+regardless of how many matching inputs or outputs they contain.
+
+For example, `{"id":1,"method":"blockchain.address.get_history_count","params":["bitcoincash:qz9cq5ytxmejfqqr0l5clkmw0l52pj6n5yc76lup7a",true]}`
+returns a JSON-RPC integer result. An unused address returns `0`; invalid
+parameters and database failures return RPC errors.
+
+These methods do not resolve transaction hashes and are independent of
+`max_history`. They still read the stored confirmed-history value, so database
+I/O scales with that value's size. Counts reflect state during the request and
+can change following new blocks, mempool changes, or reorganisations.

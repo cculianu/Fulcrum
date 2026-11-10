@@ -4553,6 +4553,46 @@ static auto GetMaxHistoryCtrFunc(const QString &name, const QString &itemName, s
     };
 }
 
+namespace {
+    uint64_t CountSerializedHistory(const QByteArray &bytes)
+    {
+        constexpr auto recordSize = CompactTXO::compactTxNumSize();
+        if (size_t(bytes.size()) % recordSize)
+            throw DatabaseSerializationError("Invalid serialized history length");
+        return size_t(bytes.size()) / recordSize;
+    }
+#ifdef ENABLE_TESTS
+    const auto historyCountTest = App::registerTest("historycount", [] {
+        for (const size_t count : {size_t{0}, size_t{1}, size_t{300001}}) {
+            const QByteArray bytes(count * CompactTXO::compactTxNumSize(), '\0');
+            if (CountSerializedHistory(bytes) != count)
+                throw InternalError("Serialized history count mismatch");
+        }
+        bool rejected = false;
+        try { CountSerializedHistory(QByteArray(7, '\0')); }
+        catch (const DatabaseSerializationError &) { rejected = true; }
+        if (!rejected) throw InternalError("Malformed history length accepted");
+    });
+#endif
+}
+
+uint64_t Storage::getHistoryCount(const HashX &hashX, bool includeMempool) const
+{
+    SharedLockGuard g(p->blocksLock);
+    uint64_t count = 0;
+    const auto bytes = GenericDBGet<QByteArray>(p->db, p->db.shist, hashX, true,
+                                               QStringLiteral("Error retrieving history count"), false, p->db.defReadOpts);
+    if (bytes) {
+        count = CountSerializedHistory(*bytes);
+    }
+    if (includeMempool) {
+        auto [mempool, lock] = this->mempool();
+        if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end())
+            count += it->second.size();
+    }
+    return count;
+}
+
 auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeight fromHeight,
                          std::optional<BlockHeight> optToHeight) const -> History
 {
