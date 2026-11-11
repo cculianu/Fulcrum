@@ -398,6 +398,7 @@ private:
     void rpc_blockchain_address_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_get_first_use(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
     void rpc_blockchain_address_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_history_count(Client *, RPC::BatchId, const RPC::Message &);
     void rpc_blockchain_address_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_get_scripthash(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_listunspent(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -417,6 +418,7 @@ private:
     void rpc_blockchain_scripthash_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_get_first_use(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
     void rpc_blockchain_scripthash_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_get_history_count(Client *, RPC::BatchId, const RPC::Message &);
     void rpc_blockchain_scripthash_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_listunspent(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -457,8 +459,6 @@ private:
     void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
     void impl_get_first_use(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_get_history_count(Client *, RPC::BatchId, const RPC::Message &, const HashX &);
-    void rpc_blockchain_address_get_history_count(Client *, RPC::BatchId, const RPC::Message &);
-    void rpc_blockchain_scripthash_get_history_count(Client *, RPC::BatchId, const RPC::Message &);
     void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, const GetHistory_FromToBH &);
     void impl_get_mempool(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);

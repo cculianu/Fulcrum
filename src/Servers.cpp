@@ -2736,7 +2736,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"blockchain.address.get_balance",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_get_balance) },
     { {"blockchain.address.get_first_use",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_first_use) },
-    { {"blockchain.address.get_history_count", true, false, PR{1,2}, }, MP(rpc_blockchain_address_get_history_count) },
+    { {"blockchain.address.get_history_count", true,            false,    PR{1,2},                    },          MP(rpc_blockchain_address_get_history_count) },
     { {"blockchain.address.get_history",    true,               false,    PR{1,3},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
@@ -2756,7 +2756,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"blockchain.scripthash.get_balance", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_get_balance) },
     { {"blockchain.scripthash.get_first_use",  true,            false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_first_use) },
-    { {"blockchain.scripthash.get_history_count", true, false, PR{1,2}, }, MP(rpc_blockchain_scripthash_get_history_count) },
+    { {"blockchain.scripthash.get_history_count", true,         false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_get_history_count) },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,3},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
     { {"blockchain.scripthash.get_status",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_status) },
